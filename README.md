@@ -1,5 +1,7 @@
 # Single-Stage AWS Identity Center (formerly known as SSO) Pipeline 
 
+![image](https://github.com/aws-samples/single-stage-aws-iam-identity-center-pipeline/assets/93620006/86d991c7-2a7e-46d3-8bae-2420c385e36b)
+
 This pattern helps you to manage [AWS IAM Identity Center](https://aws.amazon.com/iam/identity-center/) permissions in your multi-account environment as code. With this pattern, you will be able to achieve the following defined as code:
 
 - Create, delete and update permission sets
