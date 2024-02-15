@@ -28,19 +28,19 @@ To deploy this solution, ensure you have the following requirements:
 
 ## Deployment Steps
 
-1. Stage your environment
+1. **Stage your environment**
    1. Verify the prerequisites above.
    2. Create a repository in your version control system (eg. GitHub) with a copy of this repository's code.
    3. If you have not done so yet, determine the delegated administrator account and configure it. The term `SSO Account` below will refer to the delegated administrator account.
       1. To make an account into a delegated administrator, you will need to log into the management account, navigate to the Identity Center console, go to Settings, and register your selected account as a delegated administrator.
       2. Additionally, this solution relies on delegating certain additional read-only Organizations permissions to the IdC delegated administrator so that it can resolve OU names into child account names. The permissions required for the delegated administrator are saved in `docs/required_org_permissions.json` and can be provided via the Organizations console in the management account.
       3. If you have permission sets that are used by **both** the management account and at least one non-management account (hereafter called "shared permission sets"), you will need to split the shared permission set into 2 permission sets: one for management and one for non-management. This is a limitation of using a [delegated administrator account](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin.html#delegated-admin-best-practices). This change is most easily accomplished by (in the *management* account) copying the shared permission set and naming the copied permission set "<ORIGINAL_NAME>_MGMTACCT", then updating the management account's assignments to reference that `_MGMTACCT` permission set instead. The scripts in this repository are designed to skip permission sets containing `MGMTACCT`.
-2. Tailor the Terraform Infrastructure
+2. **Tailor the Terraform Infrastructure**
    1. Update the `backend.tf` file in the root with references to your Terraform state infrastructure.
    2. Update any region specifications to the region that contains your existing SSO Identity Store. Find and replace any values labeled `YOUR_REGION_HERE`.
    3. Remove any example templates from the `terraform/source/assignments/templates` and `terraform/source/permission_sets/templates` folder.
    4. Update the configuration in `.github/workflows/.env` with the SSO account ID and pipeline role that will be used to deploy this infrastructure. Make sure that you are using a pipeline role with appropriate permissions to create/destroy the resources. 
-3. Generate imports and JSON files
+3. **Generate imports and JSON files**
    1. These steps are intended for the delegated administrator account. You should assume local credentials that allow you to access the delegated administrator account. The scripts will not touch `MGMTACCT` resources; this will only onboard non-management resources to Terraform.
    2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips).
    3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and JSON assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
@@ -48,14 +48,14 @@ To deploy this solution, ensure you have the following requirements:
       1. The scripts will also generate a `management_imports` folder for reference. You may review this to understand what resources are not accessible by the delegated administrator account. However, this `management_imports` folder is not used for this delegated administrator solution and should be deleted.
    5.  Review the contents of the `terraform/import_assignments.tf` file.
    6.  Review the contents of the `terraform/source/assignments/templates` and `terraform/source/permission_sets/templates` folders. These should now contain automatically-generated JSON files corresponding to your existing IdC infrastructure.
-4. Configure your CI/CD pipeline
+4. **Configure your CI/CD pipeline**
    1. Configure your CI/CD pipeline so that the Python data resolution script `resolve_permission_sets_and_assignments.py` is run before every `terraform plan` operation.
       1. If you do not do this, `terraform` will not have resolved data to operate on.
       2. The data resolution script also includes a call to the validation script, so you do not need to call the validation script separately.
    2. For an example of how to implement this in GitHub Actions, see the `.github/workflows` folder, specifically the `terraform.yaml` file.
    3. For an example of how to implement this in CodeBuild, see the `docs/buildspec.yaml` file.
    4. You may need to adapt these examples to meet your enterprise's CI/CD needs.
-5. Validate and optimize
+5. **Validate and Optimize**
    1.  Note: If you are running `terraform` *locally* to test your setup, you must run `resolve_permission_sets_and_assignments.py` locally before running any `terraform plan` operations. Otherwise, `terraform` will not have the resolved data to refer to.
    2.  Commit the files generated by the Python scripts to a feature branch of your repository. If using the GitHub workflows provided in `.github/workflows`, this will trigger a new pipeline run to perform a `terraform plan`.
    3.  Validate your `terraform plan` output. There should ONLY be imports, and potentially changes to `tags_all` if you keep the default `sso_pipeline=true` tag.
@@ -68,7 +68,7 @@ To deploy this solution, ensure you have the following requirements:
 
 You may want to configure automation to re-run this pipeline's `terraform apply` action whenever there is an account created or change to the OU structure, so that the appropriate access is provisioned automatically. For an outline of how to achieve that, see `.github/workflows/remote_terraform.yaml`.
 
-### Delegated Administrator vs Management Account Ownership of Infrastructure
+## Delegated Administrator vs Management Account Ownership of Infrastructure
 
 > Note: If you don't provision any SSO roles in your management account (a best practice to not provision there!), then this section should be fairly straightforward: just don't use the string `MGMTACCT` in any of your file or permission set names.
 
