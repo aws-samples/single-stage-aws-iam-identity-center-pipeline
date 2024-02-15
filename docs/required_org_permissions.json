@@ -1,0 +1,22 @@
+// Must be configured in the management account's Organizations service:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowSSOAdminToQueryOrg",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::${sso_delegated_admin_account_id}:root"
+      },
+      "Action": [
+        "organizations:ListAccounts",
+        "organizations:DescribeOrganization",
+        "organizations:DescribeOrganizationalUnit",
+        "organizations:ListRoots",
+        "organizations:ListAWSServiceAccessForOrganization",
+        "organizations:ListDelegatedAdministrators"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

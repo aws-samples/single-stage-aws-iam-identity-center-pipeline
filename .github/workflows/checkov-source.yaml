@@ -1,0 +1,73 @@
+# Reusable Checkov workflow with custom support
+
+name: Checkov
+
+permissions:
+  contents: read # for actions/checkout to fetch code
+  security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
+  actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+
+on:
+  # Reusable
+  workflow_call:
+    inputs:
+      checkov_rules_to_skip:
+        description: "String of comma-separated values of Checkov identifiers that should be skipped for this workflow."
+        type: string
+        required: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the consumer's current repo
+      - uses: actions/checkout@v4
+
+      # This step generates a GitHub App token, which can be used to clone repos/TF modules using HTTPS
+      # This step relies on reading the GitHub App private key from the Organization-wide secrets
+      # - id: create_token
+      #   uses: actions/create-github-app-token@v1
+      #   with:
+      #     app-id: ${{ secrets.READONLY_APP_ID }} # App ID of the Readonly GitHub App for reading your organization's private repos
+      #     private-key: ${{ secrets.READONLY_APP_PRIVATE_KEY }}
+      #     owner: <MY_GITHUB_ORG>
+
+      # May also check out the centralized Checkov repo if running custom checks
+      # - uses: actions/checkout@v4
+      #   id: checkout_checkov_repo
+      #   with:
+      #     repository: <MY_GITHUB_ORG>/github_checkov_custom_rules
+      #     path: centralCheckov
+      #     token: ${{ steps.create_token.outputs.token }}
+
+      # - name: Enable Terraform Git actions to use Github Apps Token
+      #   uses: de-vri-es/setup-git-credentials@v2
+      #   with:
+      #     credentials: https://git:${{ steps.app-token.outputs.token }}@github.com
+
+      - name: Checkov GitHub Action
+        uses: bridgecrewio/checkov-action@v12
+        # env:
+        #   GITHUB_TOKEN: ${{ steps.create_token.outputs.token }}
+        with:
+          skip_check: ${{ inputs.checkov_rules_to_skip }}
+          quiet: true # Will only display failed checks
+          soft_fail: false # If set to true, will not fail the pipeline if security issues are found
+          download_external_modules: true
+          # config_file: centralCheckov/.checkov.yml # This is a reference to the Configuration file with custom checks
+          framework: terraform
+          # # This will add both a CLI output to the console and create a results.sarif file
+          # output_format: cli,sarif
+          # output_file_path: console,results.sarif
+# This step is currently commented out because it requires GitHub Advanced Security. If you pay for that, feel free to add it back.
+#       - name: Upload SARIF file
+#         uses: github/codeql-action/upload-sarif@v2
+
+#         # Results are generated only on a success or failure
+#         # this is required since GitHub by default won't run the next step
+#         # when the previous one has failed. Security checks that do not pass will 'fail'.
+#         # An alternative is to add `continue-on-error: true` to the previous step
+#         # Or 'soft_fail: true' to checkov.
+#         if: success() || failure()
+#         with:
+#           sarif_file: results.sarif

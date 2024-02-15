@@ -1,0 +1,223 @@
+name: "TFApply▶"
+
+env:
+  TF_LOG_PATH: ./terraform.log
+  TF_LOG: INFO #TRACE, DEBUG, INFO, WARN or ERROR
+
+permissions:
+  id-token: write
+  contents: write # This is required for actions/checkout
+  pull-requests: write
+
+on:
+  workflow_call:
+    inputs:
+      log_level:
+        description: "Logging verbosity for Terraform"
+        type: string
+        required: false
+      pre_terraform_commands:
+        description: "Commands to execute on the Linux command line prior to Terraform run. Can include Python scripts used to resolve data, etc."
+        type: string
+        required: false
+      working_directory:
+        type: string
+        description: "Subdirectory containing the module you want to deploy. Will default to the root of the repository if not specified."
+        default: "."
+        required: false
+      custom_session_name_override:
+        type: string
+        description: "If provided, will be used as the session name instead of the default constructed from the user and job name."
+        default: ""
+      env_file_name:
+        type: string
+        description: "The name of the .env file in the .github/workflows folder containing variables for the environment. Typically just .env, but can be postfixed with an environment label, like .env.prod."
+        required: true
+
+jobs:
+  tfapply:
+    name: "TFApply▶"
+    runs-on: ubuntu-latest
+    env:
+      TF_LOG: ${{ inputs.log_level }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Source Environment Variables
+        id: dotenv
+        uses: falti/dotenv-action@v1
+        with:
+          path: .github/workflows/${{ inputs.env_file_name }} # Must contain the account number, IAM role name, and region
+
+      - name: Set Environment Variables
+        uses: c-py/action-dotenv-to-setenv@v4
+        with:
+          env-file: .github/workflows/${{ inputs.env_file_name }}
+
+      # For single-account .env files, check to ensure a backend.tf file exists
+      - name: Backend Presence Check
+        if: inputs.env_file_name == '.env'
+        run: |
+          file_path="backend.tf"
+          alt_file_path="zz-do-not-modify-backend.tf" # Used by RVM
+
+          if [ -e "$file_path"  ] || [ -e "$alt_file_path" ]; then
+              echo "backend.tf file exists."
+          else
+              echo "::error::backend.tf does not exist. You must include a backend.tf file or risk losing your TF State data!"
+              exit 1
+          fi
+
+      # If using environment-specific .env file, assume there is a backend template and use it to create an environment-specific backend.
+      # Replaces <ACCOUNT_ID> with the account in question
+      - name: Generate Account-specific Backend
+        if: inputs.env_file_name != '.env'
+        run: |
+          file_path="backend.tf.template"
+          text_to_replace="<ACCOUNT_ID>"
+          if [ -e "$file_path"  ] ; then
+              echo "$file_path file exists. Will automatically populate it with the environment's account ID."
+              if grep -q $text_to_replace backend.tf.template; then
+                  echo "String $text_to_replace was found in the file -- will replace it with the actual account ID"
+              else
+                  echo "String $text_to_replace not found in the file -- you need to keep the string $text_to_replace in the template."
+              fi
+              sed 's/<ACCOUNT_ID>/${{ steps.dotenv.outputs.aws_account_id }}/g' backend.tf.template > backend${{ inputs.env_file_name }}.tf
+          else
+              echo "::error::$file_path does not exist. You must include a $file_path file in your working directory or you will lose your TF State data!"
+              exit 1
+          fi
+          
+      # Check out the specified version from the env file, if present. This will, by design, overwrite the contents of the github.head_ref checkout. 
+      # However, the env variables values will remain as they were in the MAIN, latest branch, NOT the tagged branch
+      - name: Checkout Specific Tagged Version
+        if: steps.dotenv.outputs.tag_version_to_deploy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.dotenv.outputs.tag_version_to_deploy }}
+
+      - name: Configure AWS Credentials for reading state
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ steps.dotenv.outputs.aws_account_id }}:role/${{ steps.dotenv.outputs.aws_workflow_role }}
+          role-session-name: ${{ (inputs.custom_session_name_override != '') && inputs.custom_session_name_override || format('{0}_{1}', github.actor, github.job) }}
+          aws-region: ${{ steps.dotenv.outputs.aws_region }}
+
+      - name: Setup Python # Useful for a variety of purposes, include TF data sources that invoke Python scripts
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install boto3
+
+      - name: Run custom commands
+        if: ${{ inputs.pre_terraform_commands }}
+        run: ${{ inputs.pre_terraform_commands }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.dotenv.outputs.TERRAFORM_VERSION }}
+
+      # This step generates a GitHub App token, which can be used to clone repos/TF modules using HTTPS
+      # This step relies on reading the GitHub App private key from the Organization-wide secrets
+      # BECAUSE THIS EXAMPLE DOES NOT USE EXTERNAL PRIVATE REPOSITORIES, THIS STEP AND ITS OUTPUTS ARE COMMENTED OUT 
+      # - id: app-token
+      #   uses: actions/create-github-app-token@v1
+      #   with:
+      #     app-id: ${{ secrets.READONLY_APP_ID }} # App ID of the Readonly GitHub App for the GitHub organization
+      #     private-key: ${{ secrets.READONLY_APP_PRIVATE_KEY }}
+      #     owner: <MY_GITHUB_ORG>
+
+      # - name: Enable Terraform Git actions to use Github Apps Token
+      #   uses: de-vri-es/setup-git-credentials@v2
+      #   with:
+      #     credentials: https://git:${{ steps.app-token.outputs.token }}@github.com
+
+      - name: Terraform Init
+        id: init
+        # env:
+        #   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        # env:
+        #   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        # env:
+        #   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: terraform plan -no-color -input=false -out=terraform.tfplan
+        continue-on-error: true
+
+      - name: Terraform Apply
+        id: apply
+        # env:
+        #   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: terraform apply -input=false -no-color terraform.tfplan
+        continue-on-error: true
+
+      - name: Decode EC2 failures
+        if: steps.apply.outcome == 'failure'
+        run: |
+          # Read in all lines from the error output in terraform.log
+          REVIEWED_MESSAGES=()
+          while IFS= read -r line; do
+              if [[ "$line" == *"authorization failure message:"* ]]; then
+                  AUTHORIZATION_FAILURE_MESSAGE=$(echo "$line" | grep -o 'authorization failure message: .*' | awk -F ': ' '{print $2}')
+                  # Escape leading dash characters, which cause problems
+                  if [[ "${AUTHORIZATION_FAILURE_MESSAGE:0:1}" == "-" ]]; then
+                      AUTHORIZATION_FAILURE_MESSAGE="\-${AUTHORIZATION_FAILURE_MESSAGE:1}"
+                  fi
+                  if [[ "${REVIEWED_MESSAGES[@]}" =~ "$AUTHORIZATION_FAILURE_MESSAGE" ]]; then
+                      # Skip if we've already printed the message
+                      continue
+                  fi
+                  RESPONSE=$(aws sts decode-authorization-message --encoded-message "$AUTHORIZATION_FAILURE_MESSAGE" | jq '.["DecodedMessage"]')
+                  MATCHED_SCPS=$(echo "$RESPONSE" | jq '. | fromjson | .["matchedStatements"]')
+                  CONTEXT=$(echo "$RESPONSE" | jq '. | fromjson | .["context"]')
+                  echo "Your action may have been blocked by the following SCPs (if you see none, you may just lack permissions): ${MATCHED_SCPS}"
+                  echo "For reference, this is the context of your blocked action: ${CONTEXT}"
+                  REVIEWED_MESSAGES+=($AUTHORIZATION_FAILURE_MESSAGE)
+              fi
+          done < terraform.log
+
+      - name: Post Apply Success to GitHub PR
+        if: steps.apply.outcome == 'success'
+        uses: mshick/add-pr-comment@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          message: |
+            Applying Terraform:
+
+            ```
+            ${{ steps.apply.outputs.stdout }}
+            ```
+
+      - name: Post Apply Failure to GitHub PR
+        if: steps.apply.outcome == 'failure'
+        uses: mshick/add-pr-comment@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          message: |
+            Apply failed for Terraform:
+
+            ```
+            ${{ steps.apply.outputs.stderr }}
+            ```
+
+      - name: Terraform Apply Status
+        if: steps.apply.outcome == 'failure'
+        run: |
+          echo "::error::The Terraform Apply failed. Review the logs and make changes as needed."
+          exit 1

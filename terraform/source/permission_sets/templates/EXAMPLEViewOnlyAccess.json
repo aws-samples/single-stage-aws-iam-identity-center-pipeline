@@ -1,0 +1,21 @@
+{
+  "Name": "EXAMPLEViewOnlyAccess",
+  "Description": "An example View Only Access permission set using the default ViewOnlyAccess managed policy",
+  "SessionDuration": "PT12H",
+  "ManagedPolicies": ["arn:aws:iam::aws:policy/job-function/ViewOnlyAccess"],
+  "CustomPolicy": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "GetRoleExample",
+        "Action": ["iam:GetRole"],
+        "Effect": "Allow",
+        "Resource": "*"
+      }
+    ]
+  },
+  "CustomerPermissionBoundary": {
+    "Path": "pbounds/",
+    "Name": "ViewOnlyAccessPB"
+  }
+}

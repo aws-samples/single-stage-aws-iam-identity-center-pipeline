@@ -1,0 +1,3 @@
+These example GitHub Actions workflows are provided to help enable organizations that want a CI/CD implementation of this SSO solution but do not have a full CI/CD platform working yet.
+
+In order to use these workflows, you will need a role in your delegated administrator account that can be assumed by your CI/CD platform. For GitHub, this is achieved by creating an OIDC provider in the AWS account and creating a trust policy that permits this repository to assume the role. For details on setting up roles with this type of trust policy, see the [Role Vending Machine](https://github.com/aws-samples/role-vending-machine) repository.

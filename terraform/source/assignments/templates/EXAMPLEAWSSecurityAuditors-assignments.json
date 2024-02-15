@@ -1,0 +1,12 @@
+{
+    "Assignments": [
+        {
+            "Target": [
+                "111111111111"
+            ],
+            "PrincipalType": "GROUP",
+            "PrincipalId": "EXAMPLEAWSSecurityAuditors",
+            "PermissionSetName": "ViewOnlyAccess"
+        }
+    ]
+}

@@ -1,0 +1,45 @@
+# This is an example workflow that can be copied to individual repositories
+# This workflow will run TF plans for feature branches and TF applies for pushes to the trunk branch.
+# When using this workflow, you must also have a `.github/workflows/.env` file in your repo used to define your workflow
+name: "Terraform Workflow"
+
+permissions:
+  id-token: write
+  contents: write # This is required for actions/checkout
+  pull-requests: write
+  actions: read
+  security-events: write
+
+on:
+  # Assumes trunk-based development model
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  # Allows ad-hoc runs of workflow
+  workflow_dispatch:
+    inputs:
+      # checkov:skip=CKV_GHA_7:input values are constrained by options
+      terraform_action:
+        description: "Which Terraform action to take"
+        required: true
+        type: choice
+        options:
+          - apply
+          - plan
+
+jobs:
+  terraform:
+    name: "TF"
+    uses: ./.github/workflows/terraform-workflow-source.yaml
+    with:
+      # Run apply if this is a push or a workflow dispatch that is explicitly-specified as an apply. Otherwise run plan.
+      terraform_action: ${{ ( github.event_name == 'push' || github.event.inputs.terraform_action == 'apply' ) && 'apply' || 'plan' }}
+      working_directory: "terraform"
+      # log_level: "INFO"
+      # checkov_rules_to_skip: ""
+      # lock_to_release: ""
+      # terraform_remove_identifiers: ""
+    secrets: inherit

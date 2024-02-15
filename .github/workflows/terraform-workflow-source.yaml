@@ -1,0 +1,87 @@
+# Reusable TF workflow
+name: TF
+
+permissions:
+  id-token: write
+  contents: write # This is required for actions/checkout
+  pull-requests: write
+  actions: read
+  security-events: write
+
+on:
+  # Reusable
+  workflow_call:
+    inputs:
+      terraform_action:
+        description: "Which Terraform Action to run. Must be either 'plan' or 'apply'."
+        required: true
+        type: string
+        default: plan
+      working_directory:
+        type: string
+        description: "Subdirectory containing the module you want to deploy. Will default to the root of the repository if not specified."
+        default: "."
+        required: false
+      log_level:
+        description: "Terraform logging verbosity"
+        required: false
+        default: "INFO"
+        type: string
+      pre_terraform_commands:
+        description: "Commands to execute on the Linux command line prior to Terraform run. Can include Python scripts used to resolve data, etc."
+        type: string
+        required: false
+      checkov_rules_to_skip:
+        description: "String of comma-separated values of Checkov identifiers that should be skipped for this workflow."
+        type: string
+        required: false
+      lock_to_release:
+        description: "ID of a Terraform lock to specify for release."
+        type: string
+        required: false
+      terraform_remove_identifiers:
+        description: "Identifiers of resources to remove from Terraform state" # eg. 'module.foo.packet_device.worker'
+        type: string
+        required: false
+      custom_session_name_override:
+        type: string
+        description: "If provided, will be used as the session name instead of the default constructed from the user and job name."
+        default: ""
+      env_file_name:
+        type: string
+        description: "The name of the .env file in the .github/workflows folder containing variables for the environment. Typically just .env, but can be postfixed with an environment label, like .env.prod."
+        required: false
+        default: ".env"
+
+jobs:
+  tfplan:
+    if: inputs.terraform_action == 'plan'
+    uses: ./.github/workflows/terraform-plan-source.yaml
+    with:
+      log_level: ${{ inputs.log_level }}
+      pre_terraform_commands: ${{ inputs.pre_terraform_commands }}
+      # Releasing locks and removing resources from state can occur in the plan phase as it does not directly affect state; should not be run twice.
+      lock_to_release: ${{ inputs.lock_to_release }}
+      terraform_remove_identifiers: ${{ inputs.terraform_remove_identifiers }}
+      working_directory: ${{ inputs.working_directory }}
+      custom_session_name_override: ${{ inputs.custom_session_name_override }}
+      env_file_name: ${{ inputs.env_file_name }}
+    secrets: inherit
+
+  checkov:
+    if: inputs.terraform_action == 'plan'
+    uses: ./.github/workflows/checkov-source.yaml
+    with:
+      checkov_rules_to_skip: ${{ inputs.checkov_rules_to_skip }}
+    secrets: inherit
+
+  tfapply:
+    if: inputs.terraform_action == 'apply'
+    uses: ./.github/workflows/terraform-apply-source.yaml
+    with:
+      log_level: ${{ inputs.log_level }}
+      pre_terraform_commands: ${{ inputs.pre_terraform_commands }}
+      working_directory: ${{ inputs.working_directory }}
+      custom_session_name_override: ${{ inputs.custom_session_name_override }}
+      env_file_name: ${{ inputs.env_file_name }}
+    secrets: inherit

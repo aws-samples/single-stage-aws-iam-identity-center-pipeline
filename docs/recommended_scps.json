@@ -1,0 +1,34 @@
+// Before using this SCP, update the role(s) to the CodeBuild roles your pipeline uses.
+// Apply this SCP to the Delegated Admin account to prevent manual changes to SSO infrastructure:
+{
+  "Statement": [
+    {
+      "Sid": "BlockNonPipelineSSOChanges",
+      "Effect": "Deny",
+      "Action": [
+        "sso:Associate*",
+        "sso:Attach*",
+        "sso:Create*",
+        "sso:Delete*",
+        "sso:Detach*",
+        "sso:Disassociate*",
+        "sso:Import*",
+        "sso:Provision*",
+        "sso:Put*",
+        "sso:Start*",
+        "sso:TagResource",
+        "sso:UntagResource",
+        "sso:Update*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::${sso_delegated_admin_account_id}:role/${sso_codebuild_role1_name}",
+            "arn:aws:iam::${sso_delegated_admin_account_id}:role/${sso_codebuild_role2_name}"
+          ]
+        }
+      }
+    }
+  ]
+}
