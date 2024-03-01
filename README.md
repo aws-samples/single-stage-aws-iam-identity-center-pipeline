@@ -62,7 +62,7 @@ To deploy this solution, ensure you have the following requirements:
    4.  Merge the code to the `main` branch if the changes look accurate. If using the GitHub workflows provided in `.github/workflows`, merging to `main` will trigger a new pipeline run to perform a `terraform apply`.
    5.  Remove the import files (`import_assignments.tf`, `import_inline_policies.tf`, etc.) after the pipeline's first complete run. Imports can cause errors if they refer to resources that have been deleted (eg. if you import a assignment, then update the code to delete that assignment, attempting to import that assignment using a stale import block would cause an error). Make sure to commit the removal of the files.
    6.  [Optional] Consider consolidating assignments by OU. For a given user/permission set, the import script will create one assignment item per account. If you grant access to all accounts in an OU, you can instead put the OU ID (or `'ROOT'` for all accounts) as the target instead of the account ID. Note that OU-based assignments will only grant access to accounts directly within the OU, not accounts in sub-OUs. Also note that `'ROOT'` will not create an assignment for the management account, because of the limitations of the delegated administrator account. 
-
+   7. Verify branch protection rules. Verify that your `main` branch has branch protection rules that, at minimum, require all changes to be done through pull requests with at least 1 approval.
 
 ## External Changes
 
