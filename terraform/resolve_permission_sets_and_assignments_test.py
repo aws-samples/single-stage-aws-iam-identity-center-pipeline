@@ -83,6 +83,48 @@ resource "aws_ssoadmin_managed_policy_attachment" "test_managed_policy_Administr
 
     # Mock data for resolve_ou_names()
 
+    # Mock data for create_permission_set_arn_dict
+    @patch("boto3.client")
+    def test_create_permission_set_arn_dict(self, mock_boto3_client):
+        mock_sso_client = mock_get_client("sso-admin")
+        mock_boto3_client.return_value = mock_sso_client
+
+        # Define the expected results
+        instance_id = "dummyinstanceID"
+        expected_result = {
+            "PermissionSet1": "arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-1111111111111111",
+            "PermissionSet2": "arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-2222222222222222",
+        }
+
+        # Mock the return values of sso_client.list_permission_sets and sso_client.describe_permission_set
+        mock_sso_client.list_permission_sets.return_value = {
+            "PermissionSets": [
+                "arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-1111111111111111",
+                "arn:aws:sso:::permissionSet/ssoins-1111111111111111/ps-2222222222222222",
+            ]
+        }
+        # We're taking a bit of a shortcut here and not mocking individual describe_permission_set calls
+        mock_sso_client.describe_permission_set.side_effect = [
+            {
+                "PermissionSet": {"Name": "PermissionSet1"},
+            },
+            {
+                "PermissionSet": {"Name": "PermissionSet2"},
+            },
+        ]
+
+        # Call the function to test
+        result = resolve_permission_sets_and_assignments.create_permission_set_arn_dict(
+            instance_id=instance_id,
+        )
+
+        # Assertions
+        self.assertEqual(result, expected_result)
+        mock_sso_client.list_permission_sets.assert_called_once_with(
+            InstanceArn=instance_id,
+            MaxResults=100,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -80,7 +80,7 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
-REGION = "us-east-2"
+REGION = "us-east-1"
 boto_config = Config(region_name=REGION)
 
 
@@ -444,7 +444,9 @@ def create_permission_set_arn_dict(instance_id: str):
     return permission_set_arn_dict
 
 
-def resolve_targets(each_current_assignments: dict) -> list:
+def resolve_targets(
+    each_current_assignments: dict,
+) -> list:
     """
     Given an assignment JSON object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
 
@@ -474,6 +476,7 @@ def get_assignments_manifest(
     assignment: dict,
     principal_numeric_id: str,
     permission_set_arn_dict: dict,
+    control_tower_permission_sets: list,
 ) -> str:
     """
     Helper function to create a Terraform manifest for each assignment from the provided inputs
@@ -481,7 +484,7 @@ def get_assignments_manifest(
     pattern = r"[^a-zA-Z0-9-_]"
     escaped_principal = re.sub(pattern, "", assignment["PrincipalId"])
     # If managed by Control Tower, just specify the ARN directly, otherwise reference our permission set
-    if assignment["PermissionSetName"] in CONTROL_TOWER_PERMISSION_SETS:
+    if assignment["PermissionSetName"] in control_tower_permission_sets:
         permission_set_arn = permission_set_arn_dict[assignment["PermissionSetName"]]
         permission_set_argument = f'"{permission_set_arn}"'
     else:
@@ -501,7 +504,11 @@ resource "aws_ssoadmin_account_assignment" "assignment_{account}{escaped_princip
 
 
 def create_assignments_manifest_from_repo_assignments(
-    repository_assignments: dict, identity_store: str, permission_set_name_dict: dict
+    repository_assignments: dict,
+    identity_store: str,
+    permission_set_name_dict: dict,
+    mgmt_only: bool,
+    control_tower_permission_sets: list,
 ) -> dict:
     """
     Returns a string containing a Terraform manifest with all assignments represented by the template files.
@@ -562,12 +569,7 @@ def create_assignments_manifest_from_repo_assignments(
         exit(1)
 
 
-# def resolve_control_tower_permission_set_arns(permission_set_names):
-#     all_permission_sets = []
-#     return_value = {}
-
-
-if __name__ == "__main__":
+def main():
     # Environment variable that determines whether to generate management or member assignments
     try:
         mgmt_only_env = os.environ.get("MGMT_ONLY").lower() in ["true", "1"]
@@ -662,6 +664,8 @@ if __name__ == "__main__":
         repository_assignments=repository_assignments,
         identity_store=identity_store,
         permission_set_name_dict=permission_set_name_dict,
+        mgmt_only=mgmt_only,
+        control_tower_permission_sets=CONTROL_TOWER_PERMISSION_SETS,
     )
 
     with open(ASSIGNMENTS_MANIFEST_OUTPUT_FILE_PATH, "w") as f:
@@ -669,3 +673,7 @@ if __name__ == "__main__":
         logging.info(output_assignments_manifest)  # So we can see the output
 
     log.info("Association file successfully created.")
+
+
+if __name__ == "__main__":
+    main()
