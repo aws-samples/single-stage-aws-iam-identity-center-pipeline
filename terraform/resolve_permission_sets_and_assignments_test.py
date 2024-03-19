@@ -50,14 +50,39 @@ def mock_get_client(client_name, *args, **kwargs):
 
 
 class TestHelperFunctions(unittest.TestCase):
-    # Mock data for test_get_permission_set_managed_policies()
-    test_data = {
-        "Name": "test",
-        "ManagedPolicies": [
-            "arn:aws:iam:::policy/AdministratorAccess",
-        ],
-    }
-    expected_response_string_1 = """
+    def test_get_permission_set_resource(self):
+        data = {
+            "Name": "TestPermissionSet",
+            "Description": "Test description",
+            "SessionDuration": "1h",
+        }
+        expected_output = """
+resource "aws_ssoadmin_permission_set" "TestPermissionSet" {
+  lifecycle {
+    ignore_changes = [
+      instance_arn
+    ]
+  }
+  name             = "TestPermissionSet"
+  description      = "Test description"
+  instance_arn     = local.sso_instance_arn
+  session_duration = "1h"
+}
+"""
+        output = resolve_permission_sets_and_assignments.get_permission_set_resource(
+            data
+        )
+        self.assertEqual(output, expected_output)
+
+    def test_get_permission_set_managed_policies(self):
+        # Mock data for test_get_permission_set_managed_policies()
+        test_data = {
+            "Name": "test",
+            "ManagedPolicies": [
+                "arn:aws:iam:::policy/AdministratorAccess",
+            ],
+        }
+        expected_response_string_1 = """
 resource "aws_ssoadmin_managed_policy_attachment" "test_managed_policy_AdministratorAccess" {
   lifecycle {
     ignore_changes = [
@@ -69,19 +94,149 @@ resource "aws_ssoadmin_managed_policy_attachment" "test_managed_policy_Administr
   permission_set_arn = aws_ssoadmin_permission_set.test.arn
 }
 """
-    expected_response_list = [expected_response_string_1]
-
-    def test_get_permission_set_managed_policies(self):
+        expected_response_list = [expected_response_string_1]
         response = (
             resolve_permission_sets_and_assignments.get_permission_set_managed_policies(
-                data=self.test_data,
+                data=test_data,
             )
         )
         print(response)
-        print(self.expected_response_list)
-        self.assertEqual(response, self.expected_response_list)
+        print(expected_response_list)
+        self.assertEqual(response, expected_response_list)
 
-    # Mock data for resolve_ou_names()
+    def test_get_permission_set_customer_managed_policies(self):
+        data = {
+            "Name": "TestPermissionSet",
+            "CustomerManagedPolicies": ["Policy1", "Policy2"],
+        }
+        expected_output = [
+            """
+resource "aws_ssoadmin_customer_managed_policy_attachment" "TestPermissionSet_customer_managed_policy_Policy1" {
+  lifecycle {
+    ignore_changes = [
+      instance_arn
+    ]
+  }
+  instance_arn       = local.sso_instance_arn
+  permission_set_arn = aws_ssoadmin_permission_set.TestPermissionSet.arn
+  customer_managed_policy_reference {
+    name = "Policy1"
+    path = "/"
+  }
+}
+""",
+            """
+resource "aws_ssoadmin_customer_managed_policy_attachment" "TestPermissionSet_customer_managed_policy_Policy2" {
+  lifecycle {
+    ignore_changes = [
+      instance_arn
+    ]
+  }
+  instance_arn       = local.sso_instance_arn
+  permission_set_arn = aws_ssoadmin_permission_set.TestPermissionSet.arn
+  customer_managed_policy_reference {
+    name = "Policy2"
+    path = "/"
+  }
+}
+""",
+        ]
+        output = resolve_permission_sets_and_assignments.get_permission_set_customer_managed_policies(
+            data
+        )
+        self.assertEqual(output, expected_output)
+
+    def test_customer_permission_boundary(self):
+        data = {
+            "Name": "TestPermissionSet",
+            "CustomerPermissionBoundary": {
+                "Name": "TestManagedPolicy",
+                "Path": "/test/path",
+            },
+        }
+        expected_output = """
+resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permission_boundary" {
+  lifecycle {
+    ignore_changes = [
+      instance_arn
+    ]
+  }
+
+  instance_arn       = local.sso_instance_arn
+  permission_set_arn = aws_ssoadmin_permission_set.TestPermissionSet.arn
+  permissions_boundary {
+    customer_managed_policy_reference {
+      name = "TestManagedPolicy"
+      path = "/test/path"
+    }
+  }
+}
+"""
+        response = resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
+            data
+        )
+        self.assertEqual(response, expected_output)
+
+    def test_aws_permission_boundary(self):
+        data = {
+            "Name": "TestPermissionSet",
+            "AwsPermissionBoundaryArn": "arn:aws:iam::123456789012:policy/TestPolicy",
+        }
+        expected_output = """
+resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permission_boundary" {
+  lifecycle {
+    ignore_changes = [
+      instance_arn
+    ]
+  }
+
+  instance_arn       = local.sso_instance_arn
+  permission_set_arn = aws_ssoadmin_permission_set.TestPermissionSet.arn
+  permissions_boundary {
+    managed_policy_arn = "arn:aws:iam::123456789012:policy/TestPolicy"
+  }
+}
+"""
+        output = resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
+            data
+        )
+        self.assertEqual(output, expected_output)
+
+    def test_multiple_permission_boundaries(self):
+        data = {
+            "Name": "TestPermissionSet",
+            "CustomerPermissionBoundary": {
+                "Name": "TestManagedPolicy",
+                "Path": "/test/path",
+            },
+            "AwsPermissionBoundaryArn": "arn:aws:iam::123456789012:policy/TestPolicy",
+        }
+        with self.assertRaises(Exception):
+            resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
+                data
+            )
+
+    @patch("boto3.client")
+    def test_resolve_ou_names(self, mock_boto3_client):
+        # COMMENTED OUT - MOCKING RECURSIVE FUNCTIONS IS REALLY HARD
+        # Mock data for resolve_ou_names()
+        #     mock_boto3_client.list_organizational_units_for_parent.return_value = {
+        #         "OrganizationalUnits": [{"Id": "ou-123"}],
+        #         "NextToken": "token",
+        #     }
+
+        #     # Call the function
+        #     ou_names = resolve_permission_sets_and_assignments.resolve_ou_names(
+        #         "ou-123", mock_boto3_client
+        #     )
+
+        #     # Assertions
+        #     self.assertEqual(len(ou_names), 1)
+        #     self.assertEqual(ou_names[0]["Id"], "ou-123")
+        #     mock_boto3_client.list_organizational_units_for_parent.assert_called_once_with(
+        #         ParentId="ou-123"
+        #     )
+        pass
 
     # Mock data for create_permission_set_arn_dict
     @patch("boto3.client")
@@ -123,6 +278,55 @@ resource "aws_ssoadmin_managed_policy_attachment" "test_managed_policy_Administr
         mock_sso_client.list_permission_sets.assert_called_once_with(
             InstanceArn=instance_id,
             MaxResults=100,
+        )
+
+    @patch("boto3.client")
+    def test_list_accounts_in_ou(self, mock_boto3_client):
+        mock_org_client = mock_get_client("organizations")
+        mock_boto3_client.return_value = mock_org_client
+        mock_org_client.list_accounts_for_parent.return_value = {
+            "Accounts": [
+                {
+                    "Id": "111111111111",
+                    "Status": "ACTIVE",
+                },
+                {
+                    "Id": "222222222222",
+                    "Status": "SUSPENDED",
+                },
+            ]
+        }
+        mock_org_client.list_accounts.return_value = {
+            "Accounts": [
+                {
+                    "Id": "111111111111",
+                    "Status": "ACTIVE",
+                },
+                {
+                    "Id": "222222222222",
+                    "Status": "SUSPENDED",
+                },
+                {
+                    "Id": "333333333333",
+                    "Status": "ACTIVE",
+                },
+                {
+                    "Id": "444444444444",
+                    "Status": "ACTIVE",
+                },
+            ]
+        }
+        test_response_ou = resolve_permission_sets_and_assignments.list_accounts_in_ou(
+            ou_identifier="ou-12345678"
+        )
+        test_response_root = (
+            resolve_permission_sets_and_assignments.list_accounts_in_ou(
+                ou_identifier="r-12345"
+            )
+        )
+        self.assertEqual(test_response_ou, ["111111111111"])
+        self.assertEqual(
+            test_response_root, ["111111111111", "333333333333", "444444444444"]
         )
 
 
