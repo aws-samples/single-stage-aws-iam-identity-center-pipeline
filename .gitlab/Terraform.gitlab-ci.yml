@@ -1,0 +1,87 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+variables:
+  TF_ROOT: "$CI_PROJECT_DIR/terraform" # Use absolute path in case "cd $TF_ROOT" is called redundantly
+  TF_PARAMS: ${TF_PARAMS}
+  DESTROY: ${DESTROY}
+  PLAN: "$TF_ROOT/plan.cache"
+  PLAN_JSON: "$TF_ROOT/plan.json"
+  BUILD_IMAGE: domain/org/projects/imageserver/imagename:tag
+
+image:
+  name: ${BUILD_IMAGE}
+cache:
+  key: "${CI_PIPELINE_ID}"
+  paths:
+    - ${TF_ROOT}/.terraform/
+    - ${TF_ROOT}/*.tf
+
+.init: &init
+  script:
+    - |
+      echo "* Running terraform init..."
+      cd ${TF_ROOT}
+      gitlab-terraform init ${TF_PARAMS}
+      echo "* terraform init complete."
+
+.validate: &validate
+  script:
+    - |
+      echo "* Running terraform validate..."
+      cd ${TF_ROOT}
+      gitlab-terraform validate ${TF_PARAMS}
+      echo "* terraform validate complete." 
+
+.plan: &plan
+  script:
+    - |
+      echo "* Running terraform plan..."
+      cd ${TF_ROOT}
+      gitlab-terraform plan -out=$PLAN ${TF_PARAMS}
+      echo "* terraform plan complete."
+    - terraform show --json $PLAN > $PLAN_JSON
+    - cat $PLAN_JSON | jq -r '([.resource_changes[]?.change.actions?]|flatten)|{"create":(map(select(.=="create"))|length),"update":(map(select(.=="update"))|length),"delete":(map(select(.=="delete"))|length)}' > $PLAN_JSON
+  artifacts:
+    paths:
+      - ${TF_ROOT}/plan.cache
+    reports:
+      terraform: $PLAN_JSON
+
+.apply: &apply
+  script:
+    - |
+      echo "* Running terraform apply..."
+      cd ${TF_ROOT}
+      gitlab-terraform apply
+      echo "* terraform apply complete."
+
+# .destroy: &destroy
+#   script:
+#     - |
+#       echo "* Running terraform destroy..."
+#       cd ${TF_ROOT}
+#       gitlab-terraform destroy ${TF_PARAMS}
+#       echo "* terraform destroy complete."
+
+# TODO: Post plan in MR docs: https://docs.gitlab.com/ee/user/infrastructure/iac/mr_integration.html
+# .mr_comment:
+#   script:
+#     - export COMMENT_TOKEN="$COMMENT_TOKEN"
+#     - |
+#       echo "${CI_API_V4_URL}/orgname/projects/$CI_MERGE_REQUEST_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_ID/notes"
+#       commit_comment() {
+#         curl --location --request POST "${CI_API_V4_URL}/orgname/projects/$CI_MERGE_REQUEST_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_ID/notes" --header "PRIVATE-TOKEN:$COMMENT_TOKEN" --header "Content-Type: application/json" --data-raw "{ \"body\": \"$1\" }"
+#       }
