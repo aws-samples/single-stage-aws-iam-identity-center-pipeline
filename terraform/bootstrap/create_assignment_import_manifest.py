@@ -4,16 +4,17 @@ import logging
 from botocore.config import Config
 import os
 import re
+import yaml
 
 logging.basicConfig(level=logging.INFO)
 
 # This function will create a Terraform manifest file used to import existing permission sets into the TF pipeline
-# It will also create JSON files that describe the contents of the permission set assignments
+# It will also create YAML files that describe the contents of the permission set assignments
 # Control Tower-owned assignments will not be imported.
-# The JSON files that are outputted will be grouped into files based on the user/group that has the associated entitlements
-REGION = "us-east-2"  # "YOUR_REGION_HERE"
-AUDIT_ACCOUNT_NAME = "Audit"
-LOG_ARCHIVE_ACCOUNT_NAME = "Log Archive"
+# The YAML files that are outputted will be grouped into files based on the user/group that has the associated entitlements
+REGION = "us-east-1"
+AUDIT_ACCOUNT_NAME = "realm-aws-invicro-audit"
+LOG_ARCHIVE_ACCOUNT_NAME = "realm-aws-invicro-log"
 TF_IDENTIFIER = "assignment"
 IMPORTS_FILENAME = os.path.join(".", "import_assignments.tf")
 TEMPLATE_OUTPUT_DIRECTORY = "./source/assignments/templates"
@@ -252,6 +253,9 @@ import {{
     output = {}
     for tf_index in assignment_dict:
         account_target = assignment_dict[tf_index]["details"]["target_id"]
+        account_target_name = org_client.describe_account(AccountId=account_target)[
+            "Account"
+        ]["Name"]
         principal_name = assignment_dict[tf_index]["details"]["principal_name"]
         permission_set_name = assignment_dict[tf_index]["details"][
             "permission_set_name"
@@ -261,7 +265,8 @@ import {{
             output[principal_name] = {"Assignments": []}
         output[principal_name]["Assignments"].append(
             {
-                "Target": [account_target],
+                "SID": f"{account_target_name}|{principal_name}|{permission_set_name}",
+                "Target": [account_target_name],
                 "PrincipalType": assignment_dict[tf_index]["details"]["principal_type"],
                 "PrincipalId": principal_name,
                 "PermissionSetName": permission_set_name,
@@ -269,9 +274,10 @@ import {{
         )
 
     # Walk through the output and create a file for each principal in the templates folder
+    os.makedirs(TEMPLATE_OUTPUT_DIRECTORY, exist_ok=True)
     for usergroup in output:
         template_path = os.path.join(
-            TEMPLATE_OUTPUT_DIRECTORY, f"{usergroup}-assignments.json"
+            TEMPLATE_OUTPUT_DIRECTORY, f"{usergroup}-assignments.yaml"
         )
         with open(template_path, "w") as file:
-            file.write(json.dumps(output[usergroup], indent=4))
+            file.write(yaml.dump(output[usergroup], indent=4))

@@ -284,6 +284,12 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
     def test_list_accounts_in_ou(self, mock_boto3_client):
         mock_org_client = mock_get_client("organizations")
         mock_boto3_client.return_value = mock_org_client
+        accounts_map = {
+            "active_account_in_ou_12345678": "111111111111",
+            "suspended_account_in_ou_12345678": "222222222222",
+            "active_account_in_root": "333333333333",
+            "active_account_in_root_2": "444444444444",
+        }
         mock_org_client.list_accounts_for_parent.return_value = {
             "Accounts": [
                 {
@@ -317,11 +323,13 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             ]
         }
         test_response_ou = resolve_permission_sets_and_assignments.list_accounts_in_ou(
-            ou_identifier="ou-12345678"
+            ou_identifier="ou-12345678",
+            all_accounts_map=accounts_map,
         )
         test_response_root = (
             resolve_permission_sets_and_assignments.list_accounts_in_ou(
-                ou_identifier="r-12345"
+                ou_identifier="r-12345",
+                all_accounts_map=accounts_map,
             )
         )
         self.assertEqual(test_response_ou, ["111111111111"])

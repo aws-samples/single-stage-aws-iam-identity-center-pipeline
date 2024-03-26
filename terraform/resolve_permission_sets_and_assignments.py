@@ -19,7 +19,7 @@
 
 """
 Summary
-    This script will take directories of permission set and assignment JSON files and generate
+    This script will take directories of permission set and assignment files and generate
     Terraform code that will deploy the permission sets and assignments.
 
     This script is intended to be run from a pipeline that is in line with Terraform plan/apply.
@@ -51,8 +51,8 @@ Requirements
 }
 
 Inputs
-    A path to a directory containing JSON files with IAM Identity Center Permission Set information
-    A path to a directory containing JSON files with IAM Identity Center Assignment information
+    A path to a directory containing files with IAM Identity Center Permission Set information
+    A path to a directory containing files with IAM Identity Center Assignment information
     A flag indicating whether assignments should be generated for the management account or for member accounts (default: member)
 
 Outputs
@@ -67,8 +67,12 @@ import os
 import logging
 from botocore.config import Config
 import re
+import yaml
 import argparse
 import validation.iam_identitycenter_validation as iam_identitycenter_validation
+
+REGION = "us-east-1"
+boto_config = Config(region_name=REGION)
 
 # Logging configuration
 logging.basicConfig(
@@ -80,14 +84,10 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
-REGION = "us-east-1"
-boto_config = Config(region_name=REGION)
-
-
 def get_permission_set_resource(data: dict) -> str:
     """
     Helper function to generate the Terraform resource for a permission set.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set.
     :rtype: str
     """
@@ -109,7 +109,7 @@ resource "aws_ssoadmin_permission_set" "{data["Name"]}" {{
 def get_permission_set_managed_policies(data: dict):
     """
     Helper function to generate the Terraform resource for a permission set's attached managed policies.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A list of strings containing the Terraform resource for the permission set attached managed policies.
     :rtype: list[str]
 
@@ -137,7 +137,7 @@ resource "aws_ssoadmin_managed_policy_attachment" "{data["Name"]}_managed_policy
 def get_permission_set_customer_managed_policies(data: dict):
     """
     Helper function to generate the Terraform resource for a permission set's attached customer managed policies.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A list of strings containing the Terraform resource for the permission set's attached customer managed policies.
     :rtype: list[str]
     """
@@ -167,7 +167,7 @@ resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_custo
 def get_permission_set_custom_policy(data: dict, permission_set_file_path: str) -> str:
     """
     Helper function to generate the Terraform resource for a permission set's attached custom/inline policy
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set's attached custom/inline policy
     :rtype: str
     """
@@ -189,7 +189,7 @@ resource "aws_ssoadmin_permission_set_inline_policy" "{data['Name']}_custom_poli
 def get_permission_set_permission_boundary(data) -> str:
     """
     Helper function to generate the Terraform resource for a permission set's permission boundary
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set's permission boundary
     :rtype: str
     """
@@ -236,9 +236,9 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "{data['Name']}_permissi
 
 def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
     """
-    Takes a path to a directory containing permission set JSON files and returns the Terraform resources for the
+    Takes a path to a directory containing permission set files and returns the Terraform resources for the
     permission sets.
-    :param template_path: The path to the directory containing permission set JSON files
+    :param template_path: The path to the directory containing permission set files
     :param mgmt_only: Whether to include MGMTACCT files or not
     :return: A string containing the Terraform resource for the permission sets, intended to be written to a file
     :rtype: str
@@ -251,7 +251,9 @@ def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
         tf_resources_for_template = []
         with open(eachFile, "r") as convert_file:
             try:
-                data = json.load(convert_file)
+                data = json.load(
+                    convert_file,
+                )
                 tf_resources_for_template.append(get_permission_set_resource(data))
                 if "ManagedPolicies" in data:
                     tf_resources_for_template += get_permission_set_managed_policies(
@@ -288,7 +290,7 @@ def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
 
 def load_assignments_from_file(template_path: str):
     """ """
-    assigments_files = glob.glob(os.path.join(template_path, "*.json"))
+    assigments_files = glob.glob(os.path.join(template_path, "*.yaml"))
     if not assigments_files:
         raise Exception(f"No assignments files found in directory {template_path}")
     assign_dic = {}
@@ -296,7 +298,9 @@ def load_assignments_from_file(template_path: str):
 
     for eachFile in assigments_files:
         with open(eachFile, "r") as convert_file:
-            data = json.load(convert_file)
+            data = yaml.safe_load(
+                convert_file,
+            )
             assignments_list.extend(data["Assignments"])
     assign_dic["Assignments"] = assignments_list
     log.info("Assignments successfully loaded from repository files")
@@ -323,15 +327,20 @@ def resolve_ou_names(ou_id: str, client):
     return results
 
 
-def list_accounts_in_ou(ou_identifier: str):
+def list_accounts_in_ou(
+    ou_identifier: str,
+    all_accounts_map: dict,
+):
     """
     Given an OU identifier (which can be an OU ID, OU name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
-    Account names CANNOT be used as identifiers.
 
     Root will include ALL accounts in the organization (except the management account)
     OU names/IDs will NOT be recursively walked; only the direct child accounts of the OU will be included
     """
-    client = boto3.client("organizations", config=boto_config)
+    client = boto3.client(
+        "organizations",
+        config=boto_config,
+    )
     try:
         # Case for OU ID
         if "ou-" in ou_identifier:
@@ -363,9 +372,14 @@ def list_accounts_in_ou(ou_identifier: str):
                         f"[OU: {ou_identifier}] Organization Unit ID found for OU name"
                     )
             if len(ou_ids_from_name) != 1:
-                raise Exception(
-                    f"Did not find a unique, exact name match. Expected 1 result for {ou_identifier}, but got {ou_ids_from_name}"
+                log.warning(
+                    f"Did not find a unique, exact name match for possible OU identifier '{ou_identifier}'. Expected 1 result, but got {ou_ids_from_name}. Checking if this is a known account name"
                 )
+                if ou_identifier not in all_accounts_map:
+                    raise (
+                        f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
+                    )
+
             else:
                 ou_id_from_name = ou_ids_from_name[0]
             # Get all accounts in the OU
@@ -399,7 +413,10 @@ def lookup_principal_id(
     Returns: string with User ID
     """
     try:
-        client = boto3.client("identitystore", config=boto_config)
+        client = boto3.client(
+            "identitystore",
+            config=boto_config,
+        )
         if principalType == "GROUP":
             response = client.list_groups(
                 IdentityStoreId=identity_store_id,
@@ -427,7 +444,10 @@ def create_permission_set_arn_dict(instance_id: str):
     """
     Given an SSO instance_id, returns a dict mapping Permission Set names to ARNs for all permission sets in that SSO instance.
     """
-    sso_client = boto3.client("sso-admin", config=boto_config)
+    sso_client = boto3.client(
+        "sso-admin",
+        config=boto_config,
+    )
     log.info("Creating permission set ARN dictionary")
     permission_set_arn_dict = {}
     for each_assignment in sso_client.list_permission_sets(
@@ -444,11 +464,9 @@ def create_permission_set_arn_dict(instance_id: str):
     return permission_set_arn_dict
 
 
-def resolve_targets(
-    each_current_assignments: dict,
-) -> list:
+def resolve_targets(each_current_assignments: dict, all_accounts_map: dict) -> list:
     """
-    Given an assignment JSON object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
+    Given an assignment object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
 
     Only the direct child accounts of an OU will be included in the resolved list; sub-OUs' accounts will not be included.
     If root is specified, however, all accounts in the Organization (except the management account) will be included.
@@ -458,11 +476,20 @@ def resolve_targets(
         identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
         log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
         for eachTarget in each_current_assignments["Target"]:
+            # Accounts by ID
             pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
             if pattern.match(eachTarget):
                 account_list.append(eachTarget)
+            # Accounts by Name
+            elif eachTarget in all_accounts_map:
+                account_list.append(all_accounts_map[eachTarget])
+            # OUs and ROOT
             else:
-                account_list.extend(list_accounts_in_ou(ou_identifier=eachTarget))
+                account_list.extend(
+                    list_accounts_in_ou(
+                        ou_identifier=eachTarget, all_accounts_map=all_accounts_map
+                    )
+                )
         return account_list
     except Exception as error:
         log.error(
@@ -515,16 +542,32 @@ def create_assignments_manifest_from_repo_assignments(
     """
     log.info("Creating assignment dictionary with resolved account names")
     output_assignments_manifest = []
-    org_client = boto3.client("organizations", config=boto_config)
+    org_client = boto3.client(
+        "organizations",
+        config=boto_config,
+    )
     management_account = org_client.describe_organization()["Organization"][
         "MasterAccountId"
     ]
+    all_accounts_map = {}
+    response = org_client.list_accounts()
+    if "NextToken" not in response:
+        for eachAccount in response["Accounts"]:
+            all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
+    else:
+        while "NextToken" in response:
+            for eachAccount in response["Accounts"]:
+                all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
+            response = org_client.list_accounts(NextToken=response["NextToken"])
 
     resolved_assignments = {}
     resolved_assignments["Assignments"] = []
     try:
         for assignment in repository_assignments["Assignments"]:
-            accounts = resolve_targets(assignment)
+            accounts = resolve_targets(
+                each_current_assignments=assignment,
+                all_accounts_map=all_accounts_map,
+            )
             principal_numeric_id = lookup_principal_id(
                 assignment["PrincipalId"],
                 assignment["PrincipalType"],
@@ -569,6 +612,11 @@ def create_assignments_manifest_from_repo_assignments(
         exit(1)
 
 
+# def resolve_control_tower_permission_set_arns(permission_set_names):
+#     all_permission_sets = []
+#     return_value = {}
+
+
 def main():
     # Environment variable that determines whether to generate management or member assignments
     try:
@@ -582,13 +630,13 @@ def main():
     parser.add_argument(
         "--templates-relative-path",
         action="store",
-        help="Relative path (from this script) of the directory containing the input assignment JSON files",
+        help="Relative path (from this script) of the directory containing the input assignment files",
         default="./source/assignments/templates",
     )
     parser.add_argument(
         "--permission-sets-template-relative-path",
         action="store",
-        help="Relative path (from this script) of the directory containing the input permission set JSON files",
+        help="Relative path (from this script) of the directory containing the input permission set files",
         default="./source/permission_sets/templates",
     )
     parser.add_argument(

@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 # It will also create a Terraform manifest file used to import existing managed policy attachments into the TF pipeline
 # It will also create JSON files that describe the contents of the permission sets and managed policy attachments
 # Control Tower-owned permission sets and managed policy attachments will not be imported.
-REGION = "us-east-2"  # "YOUR_REGION_HERE"
+REGION = "us-east-1"
 TF_IDENTIFIER = "from_templates"
 MEMBER_IMPORTS_DIR = "./member_imports"
 MGMT_IMPORTS_DIR = "./management_imports"
