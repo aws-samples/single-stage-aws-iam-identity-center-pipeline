@@ -42,8 +42,8 @@ To deploy this solution, ensure you have the following requirements:
    4. Update the configuration in `.github/workflows/.env` with the SSO account ID and pipeline role that will be used to deploy this infrastructure. Make sure that you are using a pipeline role with appropriate permissions to create/destroy the resources. 
 3. **Generate imports and JSON/YAML files**
    1. These steps are intended for the delegated administrator account. You should assume local credentials that allow you to access the delegated administrator account. The scripts will not touch `MGMTACCT` resources; this will only onboard non-management resources to Terraform.
-   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips).
-   3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and YAML assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
+   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips).
+   3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and YAML assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
    4. Review the contents of the `member_imports` folder. If the contents look good, **move** the `member_imports/import_*.tf` files to the `terraform` folder and delete the `member_imports` folder.
       1. The scripts will also generate a `management_imports` folder for reference. You may review this to understand what resources are not accessible by the delegated administrator account. However, this `management_imports` folder is not used for this delegated administrator solution and should be deleted.
    5.  Review the contents of the `terraform/import_assignments.tf` file.
@@ -80,19 +80,19 @@ To reconcile where a resource belongs to, this solutions establishes a naming co
 
 ## Pipeline Overview
 
-This is a typical Terraform pipeline, except that the main files (`permission_sets_auto.tf` and `assignments_auto.tf`) are generated dynamically from source JSON files.
+This is a typical Terraform pipeline, except that the main files (`permission_sets_auto.tf` and `assignments_auto.tf`) are generated dynamically from source JSON/YAML files.
 
 ## Resolve/Plan Action Deep Dive
 
-This solution is abstracted so that day-to-day management only requires updating the JSON files. However, the underlying Python and Terraform actually resolves the data and applies it to the environment.
+This solution is abstracted so that day-to-day management only requires updating the JSON/YAML files. However, the underlying Python and Terraform actually resolves the data and applies it to the environment.
 
 ### Validate Policy
 
 This checks every custom policy attached to permission sets and flags any overly permissive policies and common anti-patterns (eg. `iam:PassRole` with a wildcard Resource). These findings should be resolved prior to merging code to `main`. Note that this check does not flag overly permissive _managed_ policies (eg. `AdministratorAccess`) is typically indicative of an over-permissioned role, but will not be flagged.
 
-### Validate JSON syntax
+### Validate JSON/YAML syntax
 
-The `iam_identitycenter_validation.py` script is called as part of the `resolve_permission_sets_and_assignments.py` script. The validation script will check for any syntactical errors in the JSON files, and unsupported configurations (like two permission sets with the same name). The script will fail if there is an invalid syntax detected.
+The `iam_identitycenter_validation.py` script is called as part of the `resolve_permission_sets_and_assignments.py` script. The validation script will check for any syntactical errors in the JSON/YAML files, and unsupported configurations (like two permission sets with the same name). The script will fail if there is an invalid syntax detected.
 
 ### Resolve/Transform Data
 
@@ -111,9 +111,9 @@ Because all new accounts in a multi-account environment are moved to a specific 
 ## Best practices
 
 - This pipeline will manage (create, update and delete) only Permission Sets that are specified in it. Control Tower permission sets will not be modified.
-- You will have multiple JSON templates in the same folder (both for permission sets and assignments). Assignments files should be split into individual files **per principal** (user/group) for clarity.
+- You will have multiple JSON/YAML templates in the same folder (both for permission sets and assignments). Assignments files should be split into individual files **per principal** (user/group) for clarity.
 - When you remove a template, the pipeline will remove the assignment / permission set
-- If you remove an entire assignment JSON block, the pipeline will delete the assignment from AWS IAM Identity Center
+- If you remove an entire assignment YAML block, the pipeline will delete the assignment from AWS IAM Identity Center
 - You can't remove a permission set that is assigned to an AWS account
 - You can’t manage a permission set that is associated to the Management Account (the assignment script will skip any assignments to the management account)
 - You can’t manage predefined (AWS-managed) permission sets type

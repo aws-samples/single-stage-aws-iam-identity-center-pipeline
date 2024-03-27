@@ -60,6 +60,7 @@ Outputs
     permission_sets_auto.tf: Terraform manifest that represents the permission sets
 """
 
+import argparse
 import boto3
 import glob
 import json
@@ -70,9 +71,6 @@ import re
 import yaml
 import argparse
 import validation.iam_identitycenter_validation as iam_identitycenter_validation
-
-REGION = "us-east-1"
-boto_config = Config(region_name=REGION)
 
 # Logging configuration
 logging.basicConfig(
@@ -309,7 +307,7 @@ def load_assignments_from_file(template_path: str):
 
 def resolve_ou_names(ou_id: str, client):
     """
-    Recursively resolves OU names to a list of all child account names for that OU.
+    Recursively resolves OU names to a list of all child OU names for that OU.
     Used to help resolve OU names to OU IDs.
     """
     response = client.list_organizational_units_for_parent(ParentId=ou_id)
@@ -330,6 +328,7 @@ def resolve_ou_names(ou_id: str, client):
 def list_accounts_in_ou(
     ou_identifier: str,
     all_accounts_map: dict,
+    boto_config: Config,
 ):
     """
     Given an OU identifier (which can be an OU ID, OU name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
@@ -363,7 +362,10 @@ def list_accounts_in_ou(
             # Get all OU names and walk through them until we find the OU name in question
             root_id = client.list_roots()["Roots"][0]["Id"]
             log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
-            results = resolve_ou_names(ou_id=root_id, client=client)
+            results = resolve_ou_names(
+                ou_id=root_id,
+                client=client,
+            )
             ou_ids_from_name = []
             for each_ou in results:
                 if each_ou["Name"] == ou_identifier:
@@ -373,7 +375,7 @@ def list_accounts_in_ou(
                     )
             if len(ou_ids_from_name) != 1:
                 log.warning(
-                    f"Did not find a unique, exact name match for possible OU identifier '{ou_identifier}'. Expected 1 result, but got {ou_ids_from_name}. Checking if this is a known account name"
+                    f"Did not find a unique, exact name match for possible OU identifier '{ou_identifier}'. Expected 1 result, but got {ou_ids_from_name}. Checking if this is a known account name..."
                 )
                 if ou_identifier not in all_accounts_map:
                     raise (
@@ -406,7 +408,10 @@ def list_accounts_in_ou(
 
 
 def lookup_principal_id(
-    principalName: str, principalType: str, identity_store_id: str
+    principalName: str,
+    principalType: str,
+    identity_store_id: str,
+    boto_config: Config,
 ) -> str:
     """
     Given an identity store and principal Name and Type, looks up the user ID in the given Identity Store
@@ -424,6 +429,11 @@ def lookup_principal_id(
                     {"AttributePath": "DisplayName", "AttributeValue": principalName},
                 ],
             )
+            # Error handling in case the group name does not exist or has duplicates
+            if len(response["Groups"]) != 1:
+                raise Exception(
+                    f"It was not possible to lookup target. Reason: Expected 1 result, but got {response['Groups']}"
+                )
             return response["Groups"][0]["GroupId"]
         if principalType == "USER":
             response = client.list_users(
@@ -432,15 +442,23 @@ def lookup_principal_id(
                     {"AttributePath": "UserName", "AttributeValue": principalName},
                 ],
             )
+            # Error handling in case the user name does not exist or has duplicates
+            if len(response["Users"]) != 1:
+                raise Exception(
+                    f"It was not possible to lookup target. Reason: Expected 1 result, but got {response['Users']}"
+                )
             return response["Users"][0]["UserId"]
     except Exception as error:
         log.error(
-            f"[PR: {principalName}] [{principalType}]  It was not possible lookup target. Reason: "
+            f"[PR: {principalName}] [{principalType}]  It was not possible to lookup target. Reason: "
             + repr(error)
         )
 
 
-def create_permission_set_arn_dict(instance_id: str):
+def create_permission_set_arn_dict(
+    instance_id: str,
+    boto_config: Config,
+):
     """
     Given an SSO instance_id, returns a dict mapping Permission Set names to ARNs for all permission sets in that SSO instance.
     """
@@ -464,7 +482,11 @@ def create_permission_set_arn_dict(instance_id: str):
     return permission_set_arn_dict
 
 
-def resolve_targets(each_current_assignments: dict, all_accounts_map: dict) -> list:
+def resolve_targets(
+    each_current_assignments: dict,
+    all_accounts_map: dict,
+    boto_config: Config,
+) -> list:
     """
     Given an assignment object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
 
@@ -477,17 +499,22 @@ def resolve_targets(each_current_assignments: dict, all_accounts_map: dict) -> l
         log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
         for eachTarget in each_current_assignments["Target"]:
             # Accounts by ID
+            string_target = str(eachTarget)
             pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
-            if pattern.match(eachTarget):
-                account_list.append(eachTarget)
+            if pattern.match(string_target):
+                print("here1")
+                account_list.append(string_target)
             # Accounts by Name
-            elif eachTarget in all_accounts_map:
-                account_list.append(all_accounts_map[eachTarget])
+            elif string_target in all_accounts_map:
+                print("here2")
+                account_list.append(all_accounts_map[string_target])
             # OUs and ROOT
             else:
                 account_list.extend(
                     list_accounts_in_ou(
-                        ou_identifier=eachTarget, all_accounts_map=all_accounts_map
+                        ou_identifier=string_target,
+                        all_accounts_map=all_accounts_map,
+                        boto_config=boto_config,
                     )
                 )
         return account_list
@@ -536,6 +563,7 @@ def create_assignments_manifest_from_repo_assignments(
     permission_set_name_dict: dict,
     mgmt_only: bool,
     control_tower_permission_sets: list,
+    boto_config: Config,
 ) -> dict:
     """
     Returns a string containing a Terraform manifest with all assignments represented by the template files.
@@ -567,11 +595,13 @@ def create_assignments_manifest_from_repo_assignments(
             accounts = resolve_targets(
                 each_current_assignments=assignment,
                 all_accounts_map=all_accounts_map,
+                boto_config=boto_config,
             )
             principal_numeric_id = lookup_principal_id(
                 assignment["PrincipalId"],
                 assignment["PrincipalType"],
                 identity_store_id=identity_store,
+                boto_config=boto_config,
             )
 
             for eachAccount in accounts:
@@ -602,6 +632,7 @@ def create_assignments_manifest_from_repo_assignments(
                             assignment=assignment,
                             principal_numeric_id=principal_numeric_id,
                             permission_set_arn_dict=permission_set_name_dict,
+                            control_tower_permission_sets=control_tower_permission_sets,
                         )
                     )
 
@@ -646,11 +677,22 @@ def main():
         help="Flag to indicate whether to generate management or member assignments. This will override the environment variable MGMT_ONLY, if specified",
         default=False,
     )
-
+    parser.add_argument(
+        "--region",
+        type=str,
+        required=False,
+        help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
+    )
     args = parser.parse_args()
     templates_relative_path = args.templates_relative_path
     permission_sets_template_relative_path = args.permission_sets_template_relative_path
     mgmt_only = args.mgmt_only
+    region = args.region
+    if region is not None:
+        boto_config = Config(region_name=region)
+    else:
+        boto_config = Config()
+
     if mgmt_only is None:
         mgmt_only = mgmt_only_env
     PERMISSION_SET_MANIFEST_OUTPUT_FILE_PATH = "./permission_sets_auto.tf"
@@ -681,7 +723,7 @@ def main():
     # Config to handle throttling
     config = Config(
         retries={"max_attempts": 1000, "mode": "adaptive"},
-        region_name=REGION,
+        region_name=region,
     )
 
     # Get Identity Store and SSO Instance ARN
@@ -704,7 +746,8 @@ def main():
     )
     # Create permission set dictionary to help resolve permission set names/IDs
     permission_set_name_dict = create_permission_set_arn_dict(
-        instance_id=sso_instance_arn
+        instance_id=sso_instance_arn,
+        boto_config=boto_config,
     )
 
     # Get assignments for individual accounts and the
@@ -714,6 +757,7 @@ def main():
         permission_set_name_dict=permission_set_name_dict,
         mgmt_only=mgmt_only,
         control_tower_permission_sets=CONTROL_TOWER_PERMISSION_SETS,
+        boto_config=boto_config,
     )
 
     with open(ASSIGNMENTS_MANIFEST_OUTPUT_FILE_PATH, "w") as f:

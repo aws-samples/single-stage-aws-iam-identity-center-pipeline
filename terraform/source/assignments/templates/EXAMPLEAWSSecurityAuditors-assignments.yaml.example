@@ -3,7 +3,7 @@ Assignments:
   PrincipalType: GROUP
   PermissionSetName: ViewOnlyAccess
   Target:
-  - 11111111111 # ID of an account
+  - 11111111111 # ID of an account -- remember to quote it so that it's interpreted as a string
   - ou-12345678 # ID of an OU
 - PrincipalId: EXAMPLEAWSSecurityAuditors
   PrincipalType: GROUP
