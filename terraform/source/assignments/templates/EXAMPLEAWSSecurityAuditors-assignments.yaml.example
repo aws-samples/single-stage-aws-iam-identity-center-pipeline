@@ -1,0 +1,18 @@
+Assignments:
+- PrincipalId: EXAMPLEAWSSecurityAuditors
+  PrincipalType: GROUP
+  PermissionSetName: ViewOnlyAccess
+  Target:
+  - 11111111111 # ID of an account -- remember to quote it so that it's interpreted as a string
+  - ou-12345678 # ID of an OU
+- PrincipalId: EXAMPLEAWSSecurityAuditors
+  PrincipalType: GROUP
+  PermissionSetName: ReadOnlyAccess
+  Target:
+  - SandboxOU # Name of an OU
+  - qa-staging-account # Name of an account
+- PrincipalId: EXAMPLEAWSSecurityAuditors
+  PrincipalType: GROUP
+  PermissionSetName: SecurityAudit
+  Target:
+  - ROOT # Special keyword to target all accounts in the organization
