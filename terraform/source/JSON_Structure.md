@@ -1,6 +1,12 @@
 ## Planning your templates
 
-This pipeline will manage AWS IAM Identity Center permissions using JSON templates. These templates represent the state of your permission sets and assignments in AWS IAM Identity Center. Template JSONs should be stored in their respective `templates` folders: `terraform/source/permission_sets/templates` and `terraform/source/assignments/templates`. Examples of their content is below.
+This pipeline will manage AWS IAM Identity Center permissions using JSON templates. These templates represent the state of your permission sets and assignments in AWS IAM Identity Center. Template JSONs/YAMLs should be stored in their respective `templates` folders: `terraform/source/permission_sets/templates` and `terraform/source/assignments/templates`. Examples of their content is below.
+
+### Why both JSON and YAML?
+
+YAML adds support for comments and better readability, so is the preferred option.
+
+However, the AWS console renders JSON when displaying IAM permissions, so keeping permission sets in JSON keeps the format of permissions consistent.
 
 ### Permission Set Templates
 
@@ -8,7 +14,7 @@ This JSON template is used to manage permission sets. Each file represents a Per
 
 FILE NAME: `MyTeamAccess.json`
 
-```
+```json
 {
     "Name": "MyTeamAccess",
     "Description": "My team access in AWS",
@@ -73,41 +79,33 @@ FILE NAME: `MyTeamAccess.json`
 
 ### Assignment Templates
 
-This JSON template is used to manage the relationship between Principal vs Accounts vs PermissionSets. The following fields of the template must be filled out. The PrincipalId and PermissionSetName must exactly match the Principal Name in Identity Center and Permission Set Name in Identity Center, respectively:
+This YAML template is used to manage the relationship between Principal vs Accounts vs PermissionSets. The following fields of the template must be filled out. The PrincipalId and PermissionSetName must exactly match the Principal Name in Identity Center and Permission Set Name in Identity Center, respectively:
 
-File Name: `LAB-NetworkAdministrator@domain.internal-assignments.json`
+File Name: `LAB-NetworkAdministrator@domain.internal-assignments.yaml`
 
-```
-{
-    "Assignments": [
-        {
-            "SID": "Assignment01",
-            "Target": [
-                "ou-1234-11111111"
-            ],
-            "PrincipalType": "GROUP",
-            "PrincipalId": "LAB-NetworkAdministrator@domain.internal",
-            "PermissionSetName": "NetworkAdministrator"
-        },
-        {
-            "SID": "Assignment02",
-            "Target": [
-                "ou-1234-22222222"
-            ],
-            "PrincipalType": "GROUP",
-            "PrincipalId": "LAB-NetworkAdministrator@domain.internal",
-            "PermissionSetName": "NetworkAdministrator"
-        }
-    ]
-}
+```yaml
+Assignments:
+- PrincipalId: LAB-NetworkAdministrator@domain.internal
+  PrincipalType: GROUP
+  PermissionSetName: ViewOnlyAccess
+  Target:
+  - 11111111111 # ID of an account
+  - ou-12345678 # ID of an OU
+- PrincipalId: LAB-NetworkAdministrator@domain.internal
+  PrincipalType: GROUP
+  PermissionSetName: ReadOnlyAccess
+  Target:
+  - SandboxOU # Name of an OU
+  - qa-staging-account # Name of an account
+- PrincipalId: LAB-NetworkAdministrator@domain.internal
+  PrincipalType: GROUP
+  PermissionSetName: SecurityAudit
+  Target:
+  - ROOT # Special keyword to target all accounts in the organization
 ```
 
 > The output of the `create_assignment_import_manifest.py` file will group assignment statements into one file per Principal and use the principal name as the file's base name. While you do not need to follow this convention, it greatly simplifies working with the pipeline, as you will be able to see all of a user/group's permissions in one file.
 
-- **SID**
-  - Type: String
-  - Can be changed after deployed: No
-  - Description: Assignment identifier. Must be unique and cannot change
 - **Target**
   - Type: List (string)
   - Can be changed after deployed: Yes
@@ -120,3 +118,7 @@ File Name: `LAB-NetworkAdministrator@domain.internal-assignments.json`
   - Type: String
   - Can be changed after deployed: No
   - Description: Name of the user in the IdentityStore that will get the assignment.
+- **PermissionSetName**
+  - Type: String
+  - Can be changed after deployed: No
+  - Description: The name of the permission set that this principal should have access to in the selected targets. This MUST match the name of a Permission Set in this repository or an externally-managed permission set (eg. Control Tower-managed permission set).
