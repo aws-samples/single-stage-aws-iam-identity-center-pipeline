@@ -284,8 +284,14 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             MaxResults=100,
         )
 
+    @patch("resolve_permission_sets_and_assignments.get_all_accounts_in_ou")
     @patch("boto3.client")
-    def test_list_accounts_in_ou(self, mock_boto3_client):
+    def test_list_accounts_in_identifier(
+        self,
+        mock_boto3_client,
+        mock_get_all_accounts_in_ou,
+    ):
+        # Set the return value for the patched function
         mock_org_client = mock_get_client("organizations")
         mock_boto3_client.return_value = mock_org_client
         accounts_map = {
@@ -294,7 +300,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             "active_account_in_root": "333333333333",
             "active_account_in_root_2": "444444444444",
         }
-        mock_org_client.list_accounts_for_parent.return_value = {
+        ou_accounts_map = {
             "Accounts": [
                 {
                     "Id": "111111111111",
@@ -306,6 +312,8 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
                 },
             ]
         }
+        mock_org_client.list_accounts_for_parent.return_value = ou_accounts_map
+        mock_get_all_accounts_in_ou.return_value = ou_accounts_map["Accounts"]
         mock_org_client.list_accounts.return_value = {
             "Accounts": [
                 {
@@ -326,13 +334,16 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
                 },
             ]
         }
-        test_response_ou = resolve_permission_sets_and_assignments.list_accounts_in_ou(
-            ou_identifier="ou-12345678",
-            all_accounts_map=accounts_map,
-            boto_config=self.mock_boto_config,
+
+        test_response_ou = (
+            resolve_permission_sets_and_assignments.list_accounts_in_identifier(
+                ou_identifier="ou-12345678",
+                all_accounts_map=accounts_map,
+                boto_config=self.mock_boto_config,
+            )
         )
         test_response_root = (
-            resolve_permission_sets_and_assignments.list_accounts_in_ou(
+            resolve_permission_sets_and_assignments.list_accounts_in_identifier(
                 ou_identifier="r-12345",
                 all_accounts_map=accounts_map,
                 boto_config=self.mock_boto_config,

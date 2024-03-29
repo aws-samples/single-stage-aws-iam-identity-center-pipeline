@@ -435,14 +435,15 @@ def list_accounts_in_identifier(
                 )
             else:
                 ou_id = ou_ids_from_name[0]
-            # Get all accounts in the OU
-            if ou_id is not None:
-                results.extend(
-                    get_all_accounts_in_ou(
-                        ou_id,
-                        client,
-                    )
+
+        # Get all accounts in the OU
+        if ou_id is not None:
+            results.extend(
+                get_all_accounts_in_ou(
+                    ou_id,
+                    client,
                 )
+            )
 
     except Exception as error:
         raise Exception(

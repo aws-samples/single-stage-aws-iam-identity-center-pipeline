@@ -26,7 +26,7 @@ import sys
 import os
 import logging
 import re
-import validation.validate_policies as validate_policies
+from .validate_policies import validate_policies
 from collections import Counter
 
 """
@@ -87,8 +87,7 @@ def validate_unique_permissionset_name(permission_set_templates):
         )
         counter = Counter(list_of_permission_set_name)
         duplicates = [item for item, count in counter.items() if count > 1]
-        log.error(f"Duplicate Permission Set Names: {duplicates}")
-        exit(1)
+        raise Exception(f"Duplicate Permission Set Names: {duplicates}")
 
     log.info("No permission sets with the same name were detected.")
     return True
@@ -261,7 +260,7 @@ def main(permission_set_templates_path, assignment_templates_path):
     validate_json_policy_format(permission_set_templates)
     validate_managed_policies_arn(permission_set_templates)
     validate_management_permission_set_isolation(assignments_templates)
-    if validate_policies.validate_policies() == False:
+    if validate_policies() == False:
         log.error("Policies failed validation. Review findings and correct them.")
         exit(1)
 
