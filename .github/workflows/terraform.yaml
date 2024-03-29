@@ -38,6 +38,7 @@ jobs:
       # Run apply if this is a push or a workflow dispatch that is explicitly-specified as an apply. Otherwise run plan.
       terraform_action: ${{ ( github.event_name == 'push' || github.event.inputs.terraform_action == 'apply' ) && 'apply' || 'plan' }}
       working_directory: "terraform"
+      pre_terraform_commands: pip install PyYAML; python resolve_permission_sets_and_assignments.py
       # log_level: "INFO"
       # checkov_rules_to_skip: ""
       # lock_to_release: ""
