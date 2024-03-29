@@ -36,6 +36,7 @@ cache:
       cd ${TF_ROOT}
       gitlab-terraform init ${TF_PARAMS}
       echo "* terraform init complete."
+      pip install PyYAML
 
 .validate: &validate
   script:
