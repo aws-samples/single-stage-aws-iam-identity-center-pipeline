@@ -286,7 +286,6 @@ import {{
             output[principal_name] = {"Assignments": []}
         output[principal_name]["Assignments"].append(
             {
-                "SID": f"{account_target_name}|{principal_name}|{permission_set_name}",
                 "Target": [account_target_name],
                 "PrincipalType": assignment_dict[tf_index]["details"]["principal_type"],
                 "PrincipalId": principal_name,

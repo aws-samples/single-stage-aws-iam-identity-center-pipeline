@@ -305,9 +305,12 @@ def load_assignments_from_file(template_path: str):
     return assign_dic
 
 
-def resolve_ou_names(ou_id: str, client):
+def resolve_ou_names(
+    ou_id: str,
+    client,
+):
     """
-    Recursively resolves OU names to a list of all child OU names for that OU.
+    Recursively resolves OU names to a list of all child OU dicts for that OU.
     Used to help resolve OU names to OU IDs.
     """
     response = client.list_organizational_units_for_parent(ParentId=ou_id)
@@ -325,31 +328,68 @@ def resolve_ou_names(ou_id: str, client):
     return results
 
 
-def list_accounts_in_ou(
+def get_all_accounts_in_ou(
+    ou_id: str,
+    client,
+):
+    """
+    Recursively finds all accounts within an OU and its sub-OUs.
+    Inactive accounts will be skipped.
+
+    Returns a list of dicts containing Account information
+    Example return value:
+    [
+        {
+            "Id": "111111111111",
+            "Status": "ACTIVE",
+            ...
+        },
+        {
+            "Id": "222222222222",
+            "Status": "ACTIVE",
+            ...
+        }
+    ]
+    """
+    all_accounts = []
+    all_ous = resolve_ou_names(ou_id, client)
+    for each_ou in all_ous:
+        response = client.list_accounts_for_parent(ParentId=each_ou)
+        for each_account in response["Accounts"]:
+            if each_account["Status"] == "ACTIVE":
+                all_accounts.append(each_account)
+        while "NextToken" in response:
+            response = client.list_accounts_for_parent(
+                ParentId=ou_id, NextToken=response["NextToken"]
+            )
+            for each_account in response["Accounts"]:
+                if each_account["Status"] == "ACTIVE":
+                    all_accounts.append(each_account)
+
+    return all_accounts
+
+
+def list_accounts_in_identifier(
     ou_identifier: str,
     all_accounts_map: dict,
     boto_config: Config,
 ):
     """
-    Given an OU identifier (which can be an OU ID, OU name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
+    Given an identifier (which can be an OU ID, OU name, account name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
 
     Root will include ALL accounts in the organization (except the management account)
-    OU names/IDs will NOT be recursively walked; only the direct child accounts of the OU will be included
+    OU names/IDs WILL be recursively walked; if multiple OUs with the same name are found, an exception will be thrown
     """
+    results = []
     client = boto3.client(
         "organizations",
         config=boto_config,
     )
     try:
+        ou_id = None
         # Case for OU ID
-        if "ou-" in ou_identifier:
-            response = client.list_accounts_for_parent(ParentId=ou_identifier)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(
-                    ParentId=ou_identifier, NextToken=response["NextToken"]
-                )
-                results.extend(response["Accounts"])
+        if re.match(r"ou-", ou_identifier):
+            ou_id = ou_identifier
         # Case for Root
         elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
             response = client.list_accounts()
@@ -362,40 +402,51 @@ def list_accounts_in_ou(
             # Get all OU names and walk through them until we find the OU name in question
             root_id = client.list_roots()["Roots"][0]["Id"]
             log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
-            results = resolve_ou_names(
+            all_ous_response = resolve_ou_names(
                 ou_id=root_id,
                 client=client,
             )
             ou_ids_from_name = []
-            for each_ou in results:
+            for each_ou in all_ous_response:
                 if each_ou["Name"] == ou_identifier:
                     ou_ids_from_name.append(each_ou["Id"])
                     log.info(
-                        f"[OU: {ou_identifier}] Organization Unit ID found for OU name"
+                        f"[OU: {ou_identifier}] Organization Unit ID {each_ou['Id']} found for OU name"
                     )
-            if len(ou_ids_from_name) != 1:
-                log.warning(
-                    f"Did not find a unique, exact name match for possible OU identifier '{ou_identifier}'. Expected 1 result, but got {ou_ids_from_name}. Checking if this is a known account name..."
+            # Error checking cases
+            if len(ou_ids_from_name) == 0 and ou_identifier not in all_accounts_map:
+                raise Exception(
+                    f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
                 )
-                if ou_identifier not in all_accounts_map:
-                    raise (
-                        f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
-                    )
-
+            elif len(ou_ids_from_name) == 0 and ou_identifier in all_accounts_map:
+                results.append(
+                    {
+                        "Id": all_accounts_map[ou_identifier],
+                        "Status": "ACTIVE",
+                    }
+                )
+            elif len(ou_ids_from_name) > 0 and ou_identifier in all_accounts_map:
+                raise Exception(
+                    f"The specified '{ou_identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
+                )
+            elif len(ou_ids_from_name) > 1:
+                raise Exception(
+                    f"Found multiple matches for identifier '{ou_identifier}' as either an OU or account name. Either rename the OU(s) or specify using their ID."
+                )
             else:
-                ou_id_from_name = ou_ids_from_name[0]
+                ou_id = ou_ids_from_name[0]
             # Get all accounts in the OU
-            response = client.list_accounts_for_parent(ParentId=ou_id_from_name)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(
-                    ParentId=ou_identifier, NextToken=response["NextToken"]
+            if ou_id is not None:
+                results.extend(
+                    get_all_accounts_in_ou(
+                        ou_id,
+                        client,
+                    )
                 )
-                results.extend(response["Accounts"])
 
     except Exception as error:
-        log.error(
-            "It was not possible to list accounts from Organization Unit. Reason: "
+        raise Exception(
+            f"It was not possible to list accounts with the identifier {ou_identifier}. Reason: "
             + repr(error)
         )
 
@@ -493,36 +544,25 @@ def resolve_targets(
     Only the direct child accounts of an OU will be included in the resolved list; sub-OUs' accounts will not be included.
     If root is specified, however, all accounts in the Organization (except the management account) will be included.
     """
-    try:
-        account_list = []
-        identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
-        log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
-        for eachTarget in each_current_assignments["Target"]:
-            # Accounts by ID
-            string_target = str(eachTarget)
-            pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
-            if pattern.match(string_target):
-                print("here1")
-                account_list.append(string_target)
-            # Accounts by Name
-            elif string_target in all_accounts_map:
-                print("here2")
-                account_list.append(all_accounts_map[string_target])
-            # OUs and ROOT
-            else:
-                account_list.extend(
-                    list_accounts_in_ou(
-                        ou_identifier=string_target,
-                        all_accounts_map=all_accounts_map,
-                        boto_config=boto_config,
-                    )
+    account_list = []
+    identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
+    log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
+    for eachTarget in each_current_assignments["Target"]:
+        # Accounts by ID
+        string_target = str(eachTarget)
+        pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
+        if pattern.match(string_target):
+            account_list.append(string_target)
+        # Account names, OUs, and ROOT
+        else:
+            account_list.extend(
+                list_accounts_in_identifier(
+                    ou_identifier=string_target,
+                    all_accounts_map=all_accounts_map,
+                    boto_config=boto_config,
                 )
-        return account_list
-    except Exception as error:
-        log.error(
-            f"[Identifier: {identifier_string}] It was not possible to resolve the targets from assignment. Reason: "
-            + repr(error)
-        )
+            )
+    return account_list
 
 
 def get_assignments_manifest(
@@ -581,66 +621,68 @@ def create_assignments_manifest_from_repo_assignments(
     response = org_client.list_accounts()
     if "NextToken" not in response:
         for eachAccount in response["Accounts"]:
+            if eachAccount["Status"] != "ACTIVE":
+                continue
             all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
     else:
         while "NextToken" in response:
             for eachAccount in response["Accounts"]:
+                if eachAccount["Status"] != "ACTIVE":
+                    continue
                 all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
             response = org_client.list_accounts(NextToken=response["NextToken"])
 
     resolved_assignments = {}
     resolved_assignments["Assignments"] = []
-    try:
-        for assignment in repository_assignments["Assignments"]:
-            accounts = resolve_targets(
-                each_current_assignments=assignment,
-                all_accounts_map=all_accounts_map,
-                boto_config=boto_config,
-            )
-            principal_numeric_id = lookup_principal_id(
-                assignment["PrincipalId"],
-                assignment["PrincipalType"],
-                identity_store_id=identity_store,
-                boto_config=boto_config,
-            )
 
-            for eachAccount in accounts:
-                # This is just fancy XOR logic
-                # If the account is the management account and the assignment flag is for management only,
-                # then we will add the assignment to the resolved_assignments dictionary.
-                # Otherwise, we will skip it.
-                # If the account is not the management account and the assignment flag is NOT management only,
-                # then we will add the assignment to the resolved_assignments dictionary.
-                if (eachAccount == management_account) == (mgmt_only):
-                    # resolved_assignments["Assignments"].append(
-                    #     {
-                    #         "Sid": str(eachAccount)
-                    #         + str(assignment["PrincipalId"])
-                    #         + str(assignment["PrincipalType"])
-                    #         + str(assignment["PermissionSetName"]),
-                    #         "PrincipalId": principal_numeric_id,
-                    #         "PrincipalType": assignment["PrincipalType"],
-                    #         "PermissionSetArn": permission_set_name_dict[
-                    #             assignment["PermissionSetName"]
-                    #         ],
-                    #         "Target": eachAccount,
-                    #     }
-                    # )
-                    output_assignments_manifest.append(
-                        get_assignments_manifest(
-                            account=eachAccount,
-                            assignment=assignment,
-                            principal_numeric_id=principal_numeric_id,
-                            permission_set_arn_dict=permission_set_name_dict,
-                            control_tower_permission_sets=control_tower_permission_sets,
-                        )
+    for assignment in repository_assignments["Assignments"]:
+        accounts = resolve_targets(
+            each_current_assignments=assignment,
+            all_accounts_map=all_accounts_map,
+            boto_config=boto_config,
+        )
+        principal_numeric_id = lookup_principal_id(
+            assignment["PrincipalId"],
+            assignment["PrincipalType"],
+            identity_store_id=identity_store,
+            boto_config=boto_config,
+        )
+
+        for eachAccount in accounts:
+            # This is just fancy XOR logic
+            # If the account is the management account and the assignment flag is for management only,
+            # then we will add the assignment to the resolved_assignments dictionary.
+            # Otherwise, we will skip it.
+            # If the account is not the management account and the assignment flag is NOT management only,
+            # then we will add the assignment to the resolved_assignments dictionary.
+            if (eachAccount == management_account) == (mgmt_only):
+                # resolved_assignments["Assignments"].append(
+                #     {
+                #         "Sid": str(eachAccount)
+                #         + str(assignment["PrincipalId"])
+                #         + str(assignment["PrincipalType"])
+                #         + str(assignment["PermissionSetName"]),
+                #         "PrincipalId": principal_numeric_id,
+                #         "PrincipalType": assignment["PrincipalType"],
+                #         "PermissionSetArn": permission_set_name_dict[
+                #             assignment["PermissionSetName"]
+                #         ],
+                #         "Target": eachAccount,
+                #     }
+                # )
+                output_assignments_manifest.append(
+                    get_assignments_manifest(
+                        account=eachAccount,
+                        assignment=assignment,
+                        principal_numeric_id=principal_numeric_id,
+                        permission_set_arn_dict=permission_set_name_dict,
+                        control_tower_permission_sets=control_tower_permission_sets,
                     )
+                )
 
-        output_assignments_manifest = "\n".join(output_assignments_manifest)
-        return output_assignments_manifest
-    except Exception as error:
-        log.error("Error: " + repr(error))
-        exit(1)
+    # Use a set to remove duplicates from the list of assignments manifests
+    output_assignments_manifest = "\n".join(list(set(output_assignments_manifest)))
+    return output_assignments_manifest
 
 
 # def resolve_control_tower_permission_set_arns(permission_set_names):
