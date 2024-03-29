@@ -139,12 +139,21 @@ def get_permission_set_customer_managed_policies(data: dict):
     :return: A list of strings containing the Terraform resource for the permission set's attached customer managed policies.
     :rtype: list[str]
     """
-    # TODO - Currently assumes that the path is root (/). Will fix in future version.
+    if "CustomerManagedPolicies" not in data:
+        return []
+
     attachment_strings = []
     for policy_name in data["CustomerManagedPolicies"]:
+        pieces = policy_name.split(":")[-1].split("/")
+        if len(pieces) == 1:
+            path = "/"
+            policy_base_name = pieces[0]
+        else:
+            path = "/".join(pieces[:-1]) + "/"
+            policy_base_name = pieces[-1]
         attachment_strings.append(
             f"""
-resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_customer_managed_policy_{policy_name}" {{
+resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_customer_managed_policy_{policy_base_name}" {{
   lifecycle {{
     ignore_changes = [
       instance_arn
@@ -153,8 +162,8 @@ resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_custo
   instance_arn       = local.sso_instance_arn
   permission_set_arn = aws_ssoadmin_permission_set.{data["Name"]}.arn
   customer_managed_policy_reference {{
-    name = "{policy_name}"
-    path = "/"
+    name = "{policy_base_name}"
+    path = "{path}"
   }}
 }}
 """
@@ -312,17 +321,27 @@ def resolve_ou_names(
     """
     Recursively resolves OU names to a list of all child OU dicts for that OU.
     Used to help resolve OU names to OU IDs.
+
+    Includes itself, unless it's root.
     """
+    results = []
+    # Include the current OU unless it's the root
+    if not re.match(r"^r-", ou_id):
+        this_ou = client.describe_organizational_unit(
+            OrganizationalUnitId=ou_id,
+        )["OrganizationalUnit"]
+        results.append(this_ou)
+    # Get its children
     response = client.list_organizational_units_for_parent(ParentId=ou_id)
-    results = response["OrganizationalUnits"]
+    children = response["OrganizationalUnits"]
     while "NextToken" in response:
         response = client.list_organizational_units_for_parent(
             ParentId=ou_id, NextToken=response["NextToken"]
         )
-        results.extend(response["OrganizationalUnits"])
+        children.extend(response["OrganizationalUnits"])
 
-    if results:
-        for each_ou in results:
+    if children:
+        for each_ou in children:
             results.extend(resolve_ou_names(each_ou["Id"], client))
 
     return results
@@ -354,7 +373,7 @@ def get_all_accounts_in_ou(
     all_accounts = []
     all_ous = resolve_ou_names(ou_id, client)
     for each_ou in all_ous:
-        response = client.list_accounts_for_parent(ParentId=each_ou)
+        response = client.list_accounts_for_parent(ParentId=each_ou["Id"])
         for each_account in response["Accounts"]:
             if each_account["Status"] == "ACTIVE":
                 all_accounts.append(each_account)
@@ -385,70 +404,64 @@ def list_accounts_in_identifier(
         "organizations",
         config=boto_config,
     )
-    try:
-        ou_id = None
-        # Case for OU ID
-        if re.match(r"ou-", ou_identifier):
-            ou_id = ou_identifier
-        # Case for Root
-        elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
-            response = client.list_accounts()
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts(NextToken=response["NextToken"])
-                results.extend(response["Accounts"])
-        # Case for OU Name (not ID)
+    log.info(f"Resolving {ou_identifier} to a list of accounts")
+    ou_id = None
+    # Case for OU ID
+    if re.match(r"ou-", ou_identifier):
+        ou_id = ou_identifier
+    # Case for Root
+    elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
+        response = client.list_accounts()
+        results = response["Accounts"]
+        while "NextToken" in response:
+            response = client.list_accounts(NextToken=response["NextToken"])
+            results.extend(response["Accounts"])
+    # Case for OU Name (not ID)
+    else:
+        # Get all OU names and walk through them until we find the OU name in question
+        root_id = client.list_roots()["Roots"][0]["Id"]
+        log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
+        all_ous_response = resolve_ou_names(
+            ou_id=root_id,
+            client=client,
+        )
+        ou_ids_from_name = []
+        for each_ou in all_ous_response:
+            if each_ou["Name"] == ou_identifier:
+                ou_ids_from_name.append(each_ou["Id"])
+                log.info(
+                    f"[OU: {ou_identifier}] Organization Unit ID {each_ou['Id']} found for OU name"
+                )
+        # Error checking cases
+        if len(ou_ids_from_name) == 0 and ou_identifier not in all_accounts_map:
+            raise Exception(
+                f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
+            )
+        elif len(ou_ids_from_name) == 0 and ou_identifier in all_accounts_map:
+            results.append(
+                {
+                    "Id": all_accounts_map[ou_identifier],
+                    "Status": "ACTIVE",
+                }
+            )
+        elif len(ou_ids_from_name) > 0 and ou_identifier in all_accounts_map:
+            raise Exception(
+                f"The specified '{ou_identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
+            )
+        elif len(ou_ids_from_name) > 1:
+            raise Exception(
+                f"Found multiple matches for identifier '{ou_identifier}' as either an OU or account name. Either rename the OU(s) or specify using their ID."
+            )
         else:
-            # Get all OU names and walk through them until we find the OU name in question
-            root_id = client.list_roots()["Roots"][0]["Id"]
-            log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
-            all_ous_response = resolve_ou_names(
-                ou_id=root_id,
-                client=client,
-            )
-            ou_ids_from_name = []
-            for each_ou in all_ous_response:
-                if each_ou["Name"] == ou_identifier:
-                    ou_ids_from_name.append(each_ou["Id"])
-                    log.info(
-                        f"[OU: {ou_identifier}] Organization Unit ID {each_ou['Id']} found for OU name"
-                    )
-            # Error checking cases
-            if len(ou_ids_from_name) == 0 and ou_identifier not in all_accounts_map:
-                raise Exception(
-                    f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
-                )
-            elif len(ou_ids_from_name) == 0 and ou_identifier in all_accounts_map:
-                results.append(
-                    {
-                        "Id": all_accounts_map[ou_identifier],
-                        "Status": "ACTIVE",
-                    }
-                )
-            elif len(ou_ids_from_name) > 0 and ou_identifier in all_accounts_map:
-                raise Exception(
-                    f"The specified '{ou_identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
-                )
-            elif len(ou_ids_from_name) > 1:
-                raise Exception(
-                    f"Found multiple matches for identifier '{ou_identifier}' as either an OU or account name. Either rename the OU(s) or specify using their ID."
-                )
-            else:
-                ou_id = ou_ids_from_name[0]
+            ou_id = ou_ids_from_name[0]
 
-        # Get all accounts in the OU
-        if ou_id is not None:
-            results.extend(
-                get_all_accounts_in_ou(
-                    ou_id,
-                    client,
-                )
+    # Get all accounts in the OU
+    if ou_id is not None:
+        results.extend(
+            get_all_accounts_in_ou(
+                ou_id,
+                client,
             )
-
-    except Exception as error:
-        raise Exception(
-            f"It was not possible to list accounts with the identifier {ou_identifier}. Reason: "
-            + repr(error)
         )
 
     # Filter out any inactive accounts
