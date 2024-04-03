@@ -1,3 +1,4 @@
+import argparse
 import boto3
 from botocore.config import Config
 import json
@@ -11,8 +12,6 @@ logging.basicConfig(level=logging.INFO)
 # It will also create a Terraform manifest file used to import existing managed policy attachments into the TF pipeline
 # It will also create JSON files that describe the contents of the permission sets and managed policy attachments
 # Control Tower-owned permission sets and managed policy attachments will not be imported.
-REGION = "us-east-2"  # "YOUR_REGION_HERE"
-TF_IDENTIFIER = "from_templates"
 MEMBER_IMPORTS_DIR = "./member_imports"
 MGMT_IMPORTS_DIR = "./management_imports"
 for import_dir in [MEMBER_IMPORTS_DIR, MGMT_IMPORTS_DIR]:
@@ -39,6 +38,15 @@ BOUNDARY_FILENAME_MANAGEMENT = os.path.join(
 PS_TEMPLATE_DIRECTORY = "./source/permission_sets/templates"
 
 if __name__ == "__main__":  # Get Identity Store and SSO Instance ARN
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--region",
+        type=str,
+        required=True,
+        help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
+    )
+    args = parser.parse_args()
+    region = args.region
     # These permission sets are created by Control Tower and should not be imported.
     control_tower_permission_set_names = [
         "AWSOrganizationsFullAccess",
@@ -50,7 +58,8 @@ if __name__ == "__main__":  # Get Identity Store and SSO Instance ARN
     ]
     # Config to handle throttling
     config = Config(
-        retries={"max_attempts": 1000, "mode": "adaptive"}, region_name=REGION
+        retries={"max_attempts": 1000, "mode": "adaptive"},
+        region_name=region,
     )
     sso_client = boto3.client("sso-admin", config=config)
     response = sso_client.list_instances()

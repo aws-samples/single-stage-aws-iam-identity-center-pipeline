@@ -19,7 +19,7 @@
 
 """
 Summary
-    This script will take directories of permission set and assignment JSON files and generate
+    This script will take directories of permission set and assignment files and generate
     Terraform code that will deploy the permission sets and assignments.
 
     This script is intended to be run from a pipeline that is in line with Terraform plan/apply.
@@ -51,8 +51,8 @@ Requirements
 }
 
 Inputs
-    A path to a directory containing JSON files with IAM Identity Center Permission Set information
-    A path to a directory containing JSON files with IAM Identity Center Assignment information
+    A path to a directory containing files with IAM Identity Center Permission Set information
+    A path to a directory containing files with IAM Identity Center Assignment information
     A flag indicating whether assignments should be generated for the management account or for member accounts (default: member)
 
 Outputs
@@ -60,6 +60,7 @@ Outputs
     permission_sets_auto.tf: Terraform manifest that represents the permission sets
 """
 
+import argparse
 import boto3
 import glob
 import json
@@ -67,6 +68,7 @@ import os
 import logging
 from botocore.config import Config
 import re
+import yaml
 import argparse
 import validation.iam_identitycenter_validation as iam_identitycenter_validation
 
@@ -80,14 +82,10 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
-REGION = "us-east-1"
-boto_config = Config(region_name=REGION)
-
-
 def get_permission_set_resource(data: dict) -> str:
     """
     Helper function to generate the Terraform resource for a permission set.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set.
     :rtype: str
     """
@@ -109,7 +107,7 @@ resource "aws_ssoadmin_permission_set" "{data["Name"]}" {{
 def get_permission_set_managed_policies(data: dict):
     """
     Helper function to generate the Terraform resource for a permission set's attached managed policies.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A list of strings containing the Terraform resource for the permission set attached managed policies.
     :rtype: list[str]
 
@@ -137,16 +135,25 @@ resource "aws_ssoadmin_managed_policy_attachment" "{data["Name"]}_managed_policy
 def get_permission_set_customer_managed_policies(data: dict):
     """
     Helper function to generate the Terraform resource for a permission set's attached customer managed policies.
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A list of strings containing the Terraform resource for the permission set's attached customer managed policies.
     :rtype: list[str]
     """
-    # TODO - Currently assumes that the path is root (/). Will fix in future version.
+    if "CustomerManagedPolicies" not in data:
+        return []
+
     attachment_strings = []
     for policy_name in data["CustomerManagedPolicies"]:
+        pieces = policy_name.split(":")[-1].split("/")
+        if len(pieces) == 1:
+            path = "/"
+            policy_base_name = pieces[0]
+        else:
+            path = "/".join(pieces[:-1]) + "/"
+            policy_base_name = pieces[-1]
         attachment_strings.append(
             f"""
-resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_customer_managed_policy_{policy_name}" {{
+resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_customer_managed_policy_{policy_base_name}" {{
   lifecycle {{
     ignore_changes = [
       instance_arn
@@ -155,8 +162,8 @@ resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_custo
   instance_arn       = local.sso_instance_arn
   permission_set_arn = aws_ssoadmin_permission_set.{data["Name"]}.arn
   customer_managed_policy_reference {{
-    name = "{policy_name}"
-    path = "/"
+    name = "{policy_base_name}"
+    path = "{path}"
   }}
 }}
 """
@@ -167,7 +174,7 @@ resource "aws_ssoadmin_customer_managed_policy_attachment" "{data["Name"]}_custo
 def get_permission_set_custom_policy(data: dict, permission_set_file_path: str) -> str:
     """
     Helper function to generate the Terraform resource for a permission set's attached custom/inline policy
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set's attached custom/inline policy
     :rtype: str
     """
@@ -189,7 +196,7 @@ resource "aws_ssoadmin_permission_set_inline_policy" "{data['Name']}_custom_poli
 def get_permission_set_permission_boundary(data) -> str:
     """
     Helper function to generate the Terraform resource for a permission set's permission boundary
-    :param data: The JSON data for the permission set
+    :param data: The data for the permission set
     :return: A string containing the Terraform resource for the permission set's permission boundary
     :rtype: str
     """
@@ -236,9 +243,9 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "{data['Name']}_permissi
 
 def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
     """
-    Takes a path to a directory containing permission set JSON files and returns the Terraform resources for the
+    Takes a path to a directory containing permission set files and returns the Terraform resources for the
     permission sets.
-    :param template_path: The path to the directory containing permission set JSON files
+    :param template_path: The path to the directory containing permission set files
     :param mgmt_only: Whether to include MGMTACCT files or not
     :return: A string containing the Terraform resource for the permission sets, intended to be written to a file
     :rtype: str
@@ -251,7 +258,9 @@ def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
         tf_resources_for_template = []
         with open(eachFile, "r") as convert_file:
             try:
-                data = json.load(convert_file)
+                data = json.load(
+                    convert_file,
+                )
                 tf_resources_for_template.append(get_permission_set_resource(data))
                 if "ManagedPolicies" in data:
                     tf_resources_for_template += get_permission_set_managed_policies(
@@ -288,7 +297,7 @@ def get_permission_set_manifest_content(template_path: str, mgmt_only: bool):
 
 def load_assignments_from_file(template_path: str):
     """ """
-    assigments_files = glob.glob(os.path.join(template_path, "*.json"))
+    assigments_files = glob.glob(os.path.join(template_path, "*.yaml"))
     if not assigments_files:
         raise Exception(f"No assignments files found in directory {template_path}")
     assign_dic = {}
@@ -296,91 +305,163 @@ def load_assignments_from_file(template_path: str):
 
     for eachFile in assigments_files:
         with open(eachFile, "r") as convert_file:
-            data = json.load(convert_file)
+            data = yaml.safe_load(
+                convert_file,
+            )
             assignments_list.extend(data["Assignments"])
     assign_dic["Assignments"] = assignments_list
     log.info("Assignments successfully loaded from repository files")
     return assign_dic
 
 
-def resolve_ou_names(ou_id: str, client):
+def resolve_ou_names(
+    ou_id: str,
+    client,
+):
     """
-    Recursively resolves OU names to a list of all child account names for that OU.
+    Recursively resolves OU names to a list of all child OU dicts for that OU.
     Used to help resolve OU names to OU IDs.
+
+    Includes itself, unless it's root.
     """
+    results = []
+    # Include the current OU unless it's the root
+    if not re.match(r"^r-", ou_id):
+        this_ou = client.describe_organizational_unit(
+            OrganizationalUnitId=ou_id,
+        )["OrganizationalUnit"]
+        results.append(this_ou)
+    # Get its children
     response = client.list_organizational_units_for_parent(ParentId=ou_id)
-    results = response["OrganizationalUnits"]
+    children = response["OrganizationalUnits"]
     while "NextToken" in response:
         response = client.list_organizational_units_for_parent(
             ParentId=ou_id, NextToken=response["NextToken"]
         )
-        results.extend(response["OrganizationalUnits"])
+        children.extend(response["OrganizationalUnits"])
 
-    if results:
-        for each_ou in results:
+    if children:
+        for each_ou in children:
             results.extend(resolve_ou_names(each_ou["Id"], client))
 
     return results
 
 
-def list_accounts_in_ou(ou_identifier: str):
+def get_all_accounts_in_ou(
+    ou_id: str,
+    client,
+):
     """
-    Given an OU identifier (which can be an OU ID, OU name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
-    Account names CANNOT be used as identifiers.
+    Recursively finds all accounts within an OU and its sub-OUs.
+    Inactive accounts will be skipped.
+
+    Returns a list of dicts containing Account information
+    Example return value:
+    [
+        {
+            "Id": "111111111111",
+            "Status": "ACTIVE",
+            ...
+        },
+        {
+            "Id": "222222222222",
+            "Status": "ACTIVE",
+            ...
+        }
+    ]
+    """
+    all_accounts = []
+    all_ous = resolve_ou_names(ou_id, client)
+    for each_ou in all_ous:
+        response = client.list_accounts_for_parent(ParentId=each_ou["Id"])
+        for each_account in response["Accounts"]:
+            if each_account["Status"] == "ACTIVE":
+                all_accounts.append(each_account)
+        while "NextToken" in response:
+            response = client.list_accounts_for_parent(
+                ParentId=ou_id, NextToken=response["NextToken"]
+            )
+            for each_account in response["Accounts"]:
+                if each_account["Status"] == "ACTIVE":
+                    all_accounts.append(each_account)
+
+    return all_accounts
+
+
+def list_accounts_in_identifier(
+    ou_identifier: str,
+    all_accounts_map: dict,
+    boto_config: Config,
+):
+    """
+    Given an identifier (which can be an OU ID, OU name, account name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
 
     Root will include ALL accounts in the organization (except the management account)
-    OU names/IDs will NOT be recursively walked; only the direct child accounts of the OU will be included
+    OU names/IDs WILL be recursively walked; if multiple OUs with the same name are found, an exception will be thrown
     """
-    client = boto3.client("organizations", config=boto_config)
-    try:
-        # Case for OU ID
-        if "ou-" in ou_identifier:
-            response = client.list_accounts_for_parent(ParentId=ou_identifier)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(
-                    ParentId=ou_identifier, NextToken=response["NextToken"]
+    results = []
+    client = boto3.client(
+        "organizations",
+        config=boto_config,
+    )
+    log.info(f"Resolving {ou_identifier} to a list of accounts")
+    ou_id = None
+    # Case for OU ID
+    if re.match(r"ou-", ou_identifier):
+        ou_id = ou_identifier
+    # Case for Root
+    elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
+        response = client.list_accounts()
+        results = response["Accounts"]
+        while "NextToken" in response:
+            response = client.list_accounts(NextToken=response["NextToken"])
+            results.extend(response["Accounts"])
+    # Case for OU Name (not ID)
+    else:
+        # Get all OU names and walk through them until we find the OU name in question
+        root_id = client.list_roots()["Roots"][0]["Id"]
+        log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
+        all_ous_response = resolve_ou_names(
+            ou_id=root_id,
+            client=client,
+        )
+        ou_ids_from_name = []
+        for each_ou in all_ous_response:
+            if each_ou["Name"] == ou_identifier:
+                ou_ids_from_name.append(each_ou["Id"])
+                log.info(
+                    f"[OU: {ou_identifier}] Organization Unit ID {each_ou['Id']} found for OU name"
                 )
-                results.extend(response["Accounts"])
-        # Case for Root
-        elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
-            response = client.list_accounts()
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts(NextToken=response["NextToken"])
-                results.extend(response["Accounts"])
-        # Case for OU Name (not ID)
+        # Error checking cases
+        if len(ou_ids_from_name) == 0 and ou_identifier not in all_accounts_map:
+            raise Exception(
+                f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
+            )
+        elif len(ou_ids_from_name) == 0 and ou_identifier in all_accounts_map:
+            results.append(
+                {
+                    "Id": all_accounts_map[ou_identifier],
+                    "Status": "ACTIVE",
+                }
+            )
+        elif len(ou_ids_from_name) > 0 and ou_identifier in all_accounts_map:
+            raise Exception(
+                f"The specified '{ou_identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
+            )
+        elif len(ou_ids_from_name) > 1:
+            raise Exception(
+                f"Found multiple matches for identifier '{ou_identifier}' as either an OU or account name. Either rename the OU(s) or specify using their ID."
+            )
         else:
-            # Get all OU names and walk through them until we find the OU name in question
-            root_id = client.list_roots()["Roots"][0]["Id"]
-            log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
-            results = resolve_ou_names(ou_id=root_id, client=client)
-            ou_ids_from_name = []
-            for each_ou in results:
-                if each_ou["Name"] == ou_identifier:
-                    ou_ids_from_name.append(each_ou["Id"])
-                    log.info(
-                        f"[OU: {ou_identifier}] Organization Unit ID found for OU name"
-                    )
-            if len(ou_ids_from_name) != 1:
-                raise Exception(
-                    f"Did not find a unique, exact name match. Expected 1 result for {ou_identifier}, but got {ou_ids_from_name}"
-                )
-            else:
-                ou_id_from_name = ou_ids_from_name[0]
-            # Get all accounts in the OU
-            response = client.list_accounts_for_parent(ParentId=ou_id_from_name)
-            results = response["Accounts"]
-            while "NextToken" in response:
-                response = client.list_accounts_for_parent(
-                    ParentId=ou_identifier, NextToken=response["NextToken"]
-                )
-                results.extend(response["Accounts"])
+            ou_id = ou_ids_from_name[0]
 
-    except Exception as error:
-        log.error(
-            "It was not possible to list accounts from Organization Unit. Reason: "
-            + repr(error)
+    # Get all accounts in the OU
+    if ou_id is not None:
+        results.extend(
+            get_all_accounts_in_ou(
+                ou_id,
+                client,
+            )
         )
 
     # Filter out any inactive accounts
@@ -392,14 +473,20 @@ def list_accounts_in_ou(ou_identifier: str):
 
 
 def lookup_principal_id(
-    principalName: str, principalType: str, identity_store_id: str
+    principalName: str,
+    principalType: str,
+    identity_store_id: str,
+    boto_config: Config,
 ) -> str:
     """
     Given an identity store and principal Name and Type, looks up the user ID in the given Identity Store
     Returns: string with User ID
     """
     try:
-        client = boto3.client("identitystore", config=boto_config)
+        client = boto3.client(
+            "identitystore",
+            config=boto_config,
+        )
         if principalType == "GROUP":
             response = client.list_groups(
                 IdentityStoreId=identity_store_id,
@@ -407,6 +494,11 @@ def lookup_principal_id(
                     {"AttributePath": "DisplayName", "AttributeValue": principalName},
                 ],
             )
+            # Error handling in case the group name does not exist or has duplicates
+            if len(response["Groups"]) != 1:
+                raise Exception(
+                    f"It was not possible to lookup target. Reason: Expected 1 result, but got {response['Groups']}"
+                )
             return response["Groups"][0]["GroupId"]
         if principalType == "USER":
             response = client.list_users(
@@ -415,19 +507,30 @@ def lookup_principal_id(
                     {"AttributePath": "UserName", "AttributeValue": principalName},
                 ],
             )
+            # Error handling in case the user name does not exist or has duplicates
+            if len(response["Users"]) != 1:
+                raise Exception(
+                    f"It was not possible to lookup target. Reason: Expected 1 result, but got {response['Users']}"
+                )
             return response["Users"][0]["UserId"]
     except Exception as error:
         log.error(
-            f"[PR: {principalName}] [{principalType}]  It was not possible lookup target. Reason: "
+            f"[PR: {principalName}] [{principalType}]  It was not possible to lookup target. Reason: "
             + repr(error)
         )
 
 
-def create_permission_set_arn_dict(instance_id: str):
+def create_permission_set_arn_dict(
+    instance_id: str,
+    boto_config: Config,
+):
     """
     Given an SSO instance_id, returns a dict mapping Permission Set names to ARNs for all permission sets in that SSO instance.
     """
-    sso_client = boto3.client("sso-admin", config=boto_config)
+    sso_client = boto3.client(
+        "sso-admin",
+        config=boto_config,
+    )
     log.info("Creating permission set ARN dictionary")
     permission_set_arn_dict = {}
     for each_assignment in sso_client.list_permission_sets(
@@ -446,29 +549,34 @@ def create_permission_set_arn_dict(instance_id: str):
 
 def resolve_targets(
     each_current_assignments: dict,
+    all_accounts_map: dict,
+    boto_config: Config,
 ) -> list:
     """
-    Given an assignment JSON object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
+    Given an assignment object, loop through its targets and flatten any OU/root references to the child accounts of that OU/root.
 
     Only the direct child accounts of an OU will be included in the resolved list; sub-OUs' accounts will not be included.
     If root is specified, however, all accounts in the Organization (except the management account) will be included.
     """
-    try:
-        account_list = []
-        identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
-        log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
-        for eachTarget in each_current_assignments["Target"]:
-            pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
-            if pattern.match(eachTarget):
-                account_list.append(eachTarget)
-            else:
-                account_list.extend(list_accounts_in_ou(ou_identifier=eachTarget))
-        return account_list
-    except Exception as error:
-        log.error(
-            f"[Identifier: {identifier_string}] It was not possible to resolve the targets from assignment. Reason: "
-            + repr(error)
-        )
+    account_list = []
+    identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
+    log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
+    for eachTarget in each_current_assignments["Target"]:
+        # Accounts by ID
+        string_target = str(eachTarget)
+        pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
+        if pattern.match(string_target):
+            account_list.append(string_target)
+        # Account names, OUs, and ROOT
+        else:
+            account_list.extend(
+                list_accounts_in_identifier(
+                    ou_identifier=string_target,
+                    all_accounts_map=all_accounts_map,
+                    boto_config=boto_config,
+                )
+            )
+    return account_list
 
 
 def get_assignments_manifest(
@@ -509,64 +617,91 @@ def create_assignments_manifest_from_repo_assignments(
     permission_set_name_dict: dict,
     mgmt_only: bool,
     control_tower_permission_sets: list,
+    boto_config: Config,
 ) -> dict:
     """
     Returns a string containing a Terraform manifest with all assignments represented by the template files.
     """
     log.info("Creating assignment dictionary with resolved account names")
     output_assignments_manifest = []
-    org_client = boto3.client("organizations", config=boto_config)
+    org_client = boto3.client(
+        "organizations",
+        config=boto_config,
+    )
     management_account = org_client.describe_organization()["Organization"][
         "MasterAccountId"
     ]
+    all_accounts_map = {}
+    response = org_client.list_accounts()
+    if "NextToken" not in response:
+        for eachAccount in response["Accounts"]:
+            if eachAccount["Status"] != "ACTIVE":
+                continue
+            all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
+    else:
+        while "NextToken" in response:
+            for eachAccount in response["Accounts"]:
+                if eachAccount["Status"] != "ACTIVE":
+                    continue
+                all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
+            response = org_client.list_accounts(NextToken=response["NextToken"])
 
     resolved_assignments = {}
     resolved_assignments["Assignments"] = []
-    try:
-        for assignment in repository_assignments["Assignments"]:
-            accounts = resolve_targets(assignment)
-            principal_numeric_id = lookup_principal_id(
-                assignment["PrincipalId"],
-                assignment["PrincipalType"],
-                identity_store_id=identity_store,
-            )
 
-            for eachAccount in accounts:
-                # This is just fancy XOR logic
-                # If the account is the management account and the assignment flag is for management only,
-                # then we will add the assignment to the resolved_assignments dictionary.
-                # Otherwise, we will skip it.
-                # If the account is not the management account and the assignment flag is NOT management only,
-                # then we will add the assignment to the resolved_assignments dictionary.
-                if (eachAccount == management_account) == (mgmt_only):
-                    # resolved_assignments["Assignments"].append(
-                    #     {
-                    #         "Sid": str(eachAccount)
-                    #         + str(assignment["PrincipalId"])
-                    #         + str(assignment["PrincipalType"])
-                    #         + str(assignment["PermissionSetName"]),
-                    #         "PrincipalId": principal_numeric_id,
-                    #         "PrincipalType": assignment["PrincipalType"],
-                    #         "PermissionSetArn": permission_set_name_dict[
-                    #             assignment["PermissionSetName"]
-                    #         ],
-                    #         "Target": eachAccount,
-                    #     }
-                    # )
-                    output_assignments_manifest.append(
-                        get_assignments_manifest(
-                            account=eachAccount,
-                            assignment=assignment,
-                            principal_numeric_id=principal_numeric_id,
-                            permission_set_arn_dict=permission_set_name_dict,
-                        )
+    for assignment in repository_assignments["Assignments"]:
+        accounts = resolve_targets(
+            each_current_assignments=assignment,
+            all_accounts_map=all_accounts_map,
+            boto_config=boto_config,
+        )
+        principal_numeric_id = lookup_principal_id(
+            assignment["PrincipalId"],
+            assignment["PrincipalType"],
+            identity_store_id=identity_store,
+            boto_config=boto_config,
+        )
+
+        for eachAccount in accounts:
+            # This is just fancy XOR logic
+            # If the account is the management account and the assignment flag is for management only,
+            # then we will add the assignment to the resolved_assignments dictionary.
+            # Otherwise, we will skip it.
+            # If the account is not the management account and the assignment flag is NOT management only,
+            # then we will add the assignment to the resolved_assignments dictionary.
+            if (eachAccount == management_account) == (mgmt_only):
+                # resolved_assignments["Assignments"].append(
+                #     {
+                #         "Sid": str(eachAccount)
+                #         + str(assignment["PrincipalId"])
+                #         + str(assignment["PrincipalType"])
+                #         + str(assignment["PermissionSetName"]),
+                #         "PrincipalId": principal_numeric_id,
+                #         "PrincipalType": assignment["PrincipalType"],
+                #         "PermissionSetArn": permission_set_name_dict[
+                #             assignment["PermissionSetName"]
+                #         ],
+                #         "Target": eachAccount,
+                #     }
+                # )
+                output_assignments_manifest.append(
+                    get_assignments_manifest(
+                        account=eachAccount,
+                        assignment=assignment,
+                        principal_numeric_id=principal_numeric_id,
+                        permission_set_arn_dict=permission_set_name_dict,
+                        control_tower_permission_sets=control_tower_permission_sets,
                     )
+                )
 
-        output_assignments_manifest = "\n".join(output_assignments_manifest)
-        return output_assignments_manifest
-    except Exception as error:
-        log.error("Error: " + repr(error))
-        exit(1)
+    # Use a set to remove duplicates from the list of assignments manifests
+    output_assignments_manifest = "\n".join(list(set(output_assignments_manifest)))
+    return output_assignments_manifest
+
+
+# def resolve_control_tower_permission_set_arns(permission_set_names):
+#     all_permission_sets = []
+#     return_value = {}
 
 
 def main():
@@ -582,13 +717,13 @@ def main():
     parser.add_argument(
         "--templates-relative-path",
         action="store",
-        help="Relative path (from this script) of the directory containing the input assignment JSON files",
+        help="Relative path (from this script) of the directory containing the input assignment files",
         default="./source/assignments/templates",
     )
     parser.add_argument(
         "--permission-sets-template-relative-path",
         action="store",
-        help="Relative path (from this script) of the directory containing the input permission set JSON files",
+        help="Relative path (from this script) of the directory containing the input permission set files",
         default="./source/permission_sets/templates",
     )
     parser.add_argument(
@@ -598,11 +733,22 @@ def main():
         help="Flag to indicate whether to generate management or member assignments. This will override the environment variable MGMT_ONLY, if specified",
         default=False,
     )
-
+    parser.add_argument(
+        "--region",
+        type=str,
+        required=False,
+        help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
+    )
     args = parser.parse_args()
     templates_relative_path = args.templates_relative_path
     permission_sets_template_relative_path = args.permission_sets_template_relative_path
     mgmt_only = args.mgmt_only
+    region = args.region
+    if region is not None:
+        boto_config = Config(region_name=region)
+    else:
+        boto_config = Config()
+
     if mgmt_only is None:
         mgmt_only = mgmt_only_env
     PERMISSION_SET_MANIFEST_OUTPUT_FILE_PATH = "./permission_sets_auto.tf"
@@ -633,7 +779,7 @@ def main():
     # Config to handle throttling
     config = Config(
         retries={"max_attempts": 1000, "mode": "adaptive"},
-        region_name=REGION,
+        region_name=region,
     )
 
     # Get Identity Store and SSO Instance ARN
@@ -656,7 +802,8 @@ def main():
     )
     # Create permission set dictionary to help resolve permission set names/IDs
     permission_set_name_dict = create_permission_set_arn_dict(
-        instance_id=sso_instance_arn
+        instance_id=sso_instance_arn,
+        boto_config=boto_config,
     )
 
     # Get assignments for individual accounts and the
@@ -666,6 +813,7 @@ def main():
         permission_set_name_dict=permission_set_name_dict,
         mgmt_only=mgmt_only,
         control_tower_permission_sets=CONTROL_TOWER_PERMISSION_SETS,
+        boto_config=boto_config,
     )
 
     with open(ASSIGNMENTS_MANIFEST_OUTPUT_FILE_PATH, "w") as f:

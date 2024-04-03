@@ -7,11 +7,11 @@ This pattern helps you to manage [AWS IAM Identity Center](https://aws.amazon.co
 
 As a rule of thumb, SSO permissions have three components: a **user group** (_who_ is allowed access?), an **account** (_where_ are they allowed access?), and a **permission set** (_what_ access is allowed?).
 
-This repository does NOT manage SSO permissions for the **MANAGEMENT** account. That is the only account that this pipeline is not able to manage, due to delegated administrator requirements. The management account has a separate set of Permission Sets and Assignments that should only be used in the management account (or not at all, preferably...less management account access is better).
+This repository does NOT manage SSO permissions for the **MANAGEMENT** account. That is the only account that this pipeline is not able to manage, due to delegated administrator requirements. The management account has a separate set of Permission Sets and Assignments that should only be used in the management account. Alternatively, you could choose to not provision any SSO roles to the management account at all: this would align with AWS's recommendation to limit use of the management account for routine tasks.
 
 ## Typical Day-to-Day Usage
 
-To update the permission sets and assignments, update the JSON files in `terraform/source/assignments/templates` and `terraform/source/permission_set/templates` and commit them to your repository. 
+To update the permission sets and assignments, update the JSON/YAML files in `terraform/source/assignments/templates` and `terraform/source/permission_set/templates` and commit them to your repository. 
 
 Documentation of their content is detailed in the `terraform/source/JSON_Structure.md` file.
 
@@ -40,21 +40,23 @@ To deploy this solution, ensure you have the following requirements:
    2. Update any region specifications to the region that contains your existing SSO Identity Store. Find and replace any values labeled `YOUR_REGION_HERE`.
    3. Remove any example templates from the `terraform/source/assignments/templates` and `terraform/source/permission_sets/templates` folder.
    4. Update the configuration in `.github/workflows/.env` with the SSO account ID and pipeline role that will be used to deploy this infrastructure. Make sure that you are using a pipeline role with appropriate permissions to create/destroy the resources. 
-3. **Generate imports and JSON files**
+3. **Generate imports and JSON/YAML files**
    1. These steps are intended for the delegated administrator account. You should assume local credentials that allow you to access the delegated administrator account. The scripts will not touch `MGMTACCT` resources; this will only onboard non-management resources to Terraform.
-   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips).
-   3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and JSON assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
+   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips).
+   3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and YAML assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
    4. Review the contents of the `member_imports` folder. If the contents look good, **move** the `member_imports/import_*.tf` files to the `terraform` folder and delete the `member_imports` folder.
       1. The scripts will also generate a `management_imports` folder for reference. You may review this to understand what resources are not accessible by the delegated administrator account. However, this `management_imports` folder is not used for this delegated administrator solution and should be deleted.
    5.  Review the contents of the `terraform/import_assignments.tf` file.
-   6.  Review the contents of the `terraform/source/assignments/templates` and `terraform/source/permission_sets/templates` folders. These should now contain automatically-generated JSON files corresponding to your existing IdC infrastructure.
+   6.  Review the contents of the `terraform/source/assignments/templates` and `terraform/source/permission_sets/templates` folders. These should now contain automatically-generated JSON/YAML files corresponding to your existing IdC infrastructure.
 4. **Configure your CI/CD pipeline**
    1. Configure your CI/CD pipeline so that the Python data resolution script `resolve_permission_sets_and_assignments.py` is run before every `terraform plan` operation.
       1. If you do not do this, `terraform` will not have resolved data to operate on.
       2. The data resolution script also includes a call to the validation script, so you do not need to call the validation script separately.
    2. For an example of how to implement this in GitHub Actions, see the `.github/workflows` folder, specifically the `terraform.yaml` file.
+      1. For an example of how to configure a pipeline role for GitHub Actions, see the [role vending machine repository](https://github.com/aws-samples/role-vending-machine).
    3. For an example of how to implement this in CodeBuild, see the `docs/buildspec.yaml` file.
-   4. You may need to adapt these examples to meet your enterprise's CI/CD needs.
+   4. For an example of how to implement this in GitLab, see the `.gitlab` folder.
+   5. You may need to adapt these examples to meet your enterprise's CI/CD needs.
 5. **Validate and Optimize**
    1.  Note: If you are running `terraform` *locally* to test your setup, you must run `resolve_permission_sets_and_assignments.py` locally before running any `terraform plan` operations. Otherwise, `terraform` will not have the resolved data to refer to.
    2.  Commit the files generated by the Python scripts to a feature branch of your repository. If using the GitHub workflows provided in `.github/workflows`, this will trigger a new pipeline run to perform a `terraform plan`.
@@ -78,19 +80,19 @@ To reconcile where a resource belongs to, this solutions establishes a naming co
 
 ## Pipeline Overview
 
-This is a typical Terraform pipeline, except that the main files (`permission_sets_auto.tf` and `assignments_auto.tf`) are generated dynamically from source JSON files.
+This is a typical Terraform pipeline, except that the main files (`permission_sets_auto.tf` and `assignments_auto.tf`) are generated dynamically from source JSON/YAML files.
 
 ## Resolve/Plan Action Deep Dive
 
-This solution is abstracted so that day-to-day management only requires updating the JSON files. However, the underlying Python and Terraform actually resolves the data and applies it to the environment.
+This solution is abstracted so that day-to-day management only requires updating the JSON/YAML files. However, the underlying Python and Terraform actually resolves the data and applies it to the environment.
 
 ### Validate Policy
 
 This checks every custom policy attached to permission sets and flags any overly permissive policies and common anti-patterns (eg. `iam:PassRole` with a wildcard Resource). These findings should be resolved prior to merging code to `main`. Note that this check does not flag overly permissive _managed_ policies (eg. `AdministratorAccess`) is typically indicative of an over-permissioned role, but will not be flagged.
 
-### Validate JSON syntax
+### Validate JSON/YAML syntax
 
-The `iam_identitycenter_validation.py` script is called as part of the `resolve_permission_sets_and_assignments.py` script. The validation script will check for any syntactical errors in the JSON files, and unsupported configurations (like two permission sets with the same name). The script will fail if there is an invalid syntax detected.
+The `iam_identitycenter_validation.py` script is called as part of the `resolve_permission_sets_and_assignments.py` script. The validation script will check for any syntactical errors in the JSON/YAML files, and unsupported configurations (like two permission sets with the same name). The script will fail if there is an invalid syntax detected.
 
 ### Resolve/Transform Data
 
@@ -109,9 +111,9 @@ Because all new accounts in a multi-account environment are moved to a specific 
 ## Best practices
 
 - This pipeline will manage (create, update and delete) only Permission Sets that are specified in it. Control Tower permission sets will not be modified.
-- You will have multiple JSON templates in the same folder (both for permission sets and assignments). Assignments files should be split into individual files **per principal** (user/group) for clarity.
+- You will have multiple JSON/YAML templates in the same folder (both for permission sets and assignments). Assignments files should be split into individual files **per principal** (user/group) for clarity.
 - When you remove a template, the pipeline will remove the assignment / permission set
-- If you remove an entire assignment JSON block, the pipeline will delete the assignment from AWS IAM Identity Center
+- If you remove an entire assignment YAML block, the pipeline will delete the assignment from AWS IAM Identity Center
 - You can't remove a permission set that is assigned to an AWS account
 - You can’t manage a permission set that is associated to the Management Account (the assignment script will skip any assignments to the management account)
 - You can’t manage predefined (AWS-managed) permission sets type

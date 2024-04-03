@@ -1,20 +1,18 @@
+import argparse
 import boto3
 import json
 import logging
 from botocore.config import Config
 import os
 import re
+import yaml
 
 logging.basicConfig(level=logging.INFO)
 
 # This function will create a Terraform manifest file used to import existing permission sets into the TF pipeline
-# It will also create JSON files that describe the contents of the permission set assignments
+# It will also create YAML files that describe the contents of the permission set assignments
 # Control Tower-owned assignments will not be imported.
-# The JSON files that are outputted will be grouped into files based on the user/group that has the associated entitlements
-REGION = "us-east-2"  # "YOUR_REGION_HERE"
-AUDIT_ACCOUNT_NAME = "Audit"
-LOG_ARCHIVE_ACCOUNT_NAME = "Log Archive"
-TF_IDENTIFIER = "assignment"
+# The YAML files that are outputted will be grouped into files based on the user/group that has the associated entitlements
 IMPORTS_FILENAME = os.path.join(".", "import_assignments.tf")
 TEMPLATE_OUTPUT_DIRECTORY = "./source/assignments/templates"
 
@@ -45,9 +43,33 @@ def is_managed_by_control_tower(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--region",
+        type=str,
+        required=True,
+        help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
+    )
+    parser.add_argument(
+        "--log-archive-account-name",
+        type=str,
+        default="Log Archive",
+        help="The name of the Log Archive account in your organization",
+    )
+    parser.add_argument(
+        "--audit-account-name",
+        type=str,
+        default="Audit",
+        help="The name of the Audit account in your organization",
+    )
+    args = parser.parse_args()
+    region = args.region
+    log_archive_account_name = args.log_archive_account_name
+    audit_account_name = args.audit_account_name
     # Config to handle throttling
     config = Config(
-        retries={"max_attempts": 10, "mode": "adaptive"}, region_name=REGION
+        retries={"max_attempts": 10, "mode": "adaptive"},
+        region_name=region,
     )
     sso_client = boto3.client("sso-admin", config=config)
     id_store_client = boto3.client("identitystore", config=config)
@@ -60,12 +82,12 @@ if __name__ == "__main__":
         audit_account_id = [
             acc["Id"]
             for acc in org_client.list_accounts()["Accounts"]
-            if acc["Name"] == AUDIT_ACCOUNT_NAME
+            if acc["Name"] == audit_account_name
         ][0]
         log_archive_id = [
             acc["Id"]
             for acc in org_client.list_accounts()["Accounts"]
-            if acc["Name"] == LOG_ARCHIVE_ACCOUNT_NAME
+            if acc["Name"] == log_archive_account_name
         ][0]
     except Exception:
         raise Exception(
@@ -252,6 +274,9 @@ import {{
     output = {}
     for tf_index in assignment_dict:
         account_target = assignment_dict[tf_index]["details"]["target_id"]
+        account_target_name = org_client.describe_account(AccountId=account_target)[
+            "Account"
+        ]["Name"]
         principal_name = assignment_dict[tf_index]["details"]["principal_name"]
         permission_set_name = assignment_dict[tf_index]["details"][
             "permission_set_name"
@@ -261,7 +286,7 @@ import {{
             output[principal_name] = {"Assignments": []}
         output[principal_name]["Assignments"].append(
             {
-                "Target": [account_target],
+                "Target": [account_target_name],
                 "PrincipalType": assignment_dict[tf_index]["details"]["principal_type"],
                 "PrincipalId": principal_name,
                 "PermissionSetName": permission_set_name,
@@ -269,9 +294,10 @@ import {{
         )
 
     # Walk through the output and create a file for each principal in the templates folder
+    os.makedirs(TEMPLATE_OUTPUT_DIRECTORY, exist_ok=True)
     for usergroup in output:
         template_path = os.path.join(
-            TEMPLATE_OUTPUT_DIRECTORY, f"{usergroup}-assignments.json"
+            TEMPLATE_OUTPUT_DIRECTORY, f"{usergroup}-assignments.yaml"
         )
         with open(template_path, "w") as file:
-            file.write(json.dumps(output[usergroup], indent=4))
+            file.write(yaml.dump(output[usergroup], indent=4))

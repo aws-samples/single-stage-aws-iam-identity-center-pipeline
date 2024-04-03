@@ -20,6 +20,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 from botocore.exceptions import ClientError
 import resolve_permission_sets_and_assignments
+from botocore.config import Config
 
 #############
 # Main Code #
@@ -50,6 +51,8 @@ def mock_get_client(client_name, *args, **kwargs):
 
 
 class TestHelperFunctions(unittest.TestCase):
+    mock_boto_config = Config(retries={"max_attempts": 0})
+
     def test_get_permission_set_resource(self):
         data = {
             "Name": "TestPermissionSet",
@@ -70,7 +73,7 @@ resource "aws_ssoadmin_permission_set" "TestPermissionSet" {
 }
 """
         output = resolve_permission_sets_and_assignments.get_permission_set_resource(
-            data
+            data=data,
         )
         self.assertEqual(output, expected_output)
 
@@ -142,7 +145,7 @@ resource "aws_ssoadmin_customer_managed_policy_attachment" "TestPermissionSet_cu
 """,
         ]
         output = resolve_permission_sets_and_assignments.get_permission_set_customer_managed_policies(
-            data
+            data=data,
         )
         self.assertEqual(output, expected_output)
 
@@ -173,7 +176,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
 }
 """
         response = resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
-            data
+            data=data,
         )
         self.assertEqual(response, expected_output)
 
@@ -198,7 +201,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
 }
 """
         output = resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
-            data
+            data=data,
         )
         self.assertEqual(output, expected_output)
 
@@ -213,7 +216,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
         }
         with self.assertRaises(Exception):
             resolve_permission_sets_and_assignments.get_permission_set_permission_boundary(
-                data
+                data=data,
             )
 
     @patch("boto3.client")
@@ -271,6 +274,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
         # Call the function to test
         result = resolve_permission_sets_and_assignments.create_permission_set_arn_dict(
             instance_id=instance_id,
+            boto_config=self.mock_boto_config,
         )
 
         # Assertions
@@ -280,11 +284,23 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             MaxResults=100,
         )
 
+    @patch("resolve_permission_sets_and_assignments.get_all_accounts_in_ou")
     @patch("boto3.client")
-    def test_list_accounts_in_ou(self, mock_boto3_client):
+    def test_list_accounts_in_identifier(
+        self,
+        mock_boto3_client,
+        mock_get_all_accounts_in_ou,
+    ):
+        # Set the return value for the patched function
         mock_org_client = mock_get_client("organizations")
         mock_boto3_client.return_value = mock_org_client
-        mock_org_client.list_accounts_for_parent.return_value = {
+        accounts_map = {
+            "active_account_in_ou_12345678": "111111111111",
+            "suspended_account_in_ou_12345678": "222222222222",
+            "active_account_in_root": "333333333333",
+            "active_account_in_root_2": "444444444444",
+        }
+        ou_accounts_map = {
             "Accounts": [
                 {
                     "Id": "111111111111",
@@ -296,6 +312,8 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
                 },
             ]
         }
+        mock_org_client.list_accounts_for_parent.return_value = ou_accounts_map
+        mock_get_all_accounts_in_ou.return_value = ou_accounts_map["Accounts"]
         mock_org_client.list_accounts.return_value = {
             "Accounts": [
                 {
@@ -316,12 +334,19 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
                 },
             ]
         }
-        test_response_ou = resolve_permission_sets_and_assignments.list_accounts_in_ou(
-            ou_identifier="ou-12345678"
+
+        test_response_ou = (
+            resolve_permission_sets_and_assignments.list_accounts_in_identifier(
+                ou_identifier="ou-12345678",
+                all_accounts_map=accounts_map,
+                boto_config=self.mock_boto_config,
+            )
         )
         test_response_root = (
-            resolve_permission_sets_and_assignments.list_accounts_in_ou(
-                ou_identifier="r-12345"
+            resolve_permission_sets_and_assignments.list_accounts_in_identifier(
+                ou_identifier="r-12345",
+                all_accounts_map=accounts_map,
+                boto_config=self.mock_boto_config,
             )
         )
         self.assertEqual(test_response_ou, ["111111111111"])
