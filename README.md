@@ -134,3 +134,9 @@ This is adapted from https://github.com/aws-samples/aws-iam-identity-center-pipe
 ## AWS Prescriptive Guidance
 
 This artifact is published as AWS Prescriptive Guidance. You can find it with the title `How to deploy IAM Identity Center (SSO) via a Single-Stage Terraform Pipeline`.
+
+## Contributors
+
+- Benjamin Morris (primary developer)
+- Andre Cavalcante (developer of [this project's inspiration](https://github.com/aws-samples/aws-iam-identity-center-pipeline))
+- Todd O'Boyle (security reviewer and unit test developer)
