@@ -81,15 +81,18 @@ if __name__ == "__main__":
     try:
         # Get all accounts via paginating
         all_accounts = []
-        next_token = ""
-        while True:
+        
+        # Do the first run
+        initial_response = org_client.list_accounts()
+        all_accounts.extend(initial_response["Accounts"])
+        next_token = initial_response.get("NextToken")
+        
+        # Do the subsequent runs as necessary
+        while next_token:
             response = org_client.list_accounts(NextToken=next_token)
-            accounts = response["Accounts"]
-            all_accounts.extend(accounts)
-    
+            all_accounts.extend(response["Accounts"])
+
             next_token = response.get("NextToken")
-            if not next_token:
-                break
                 
         audit_account_id = [
             acc["Id"]
