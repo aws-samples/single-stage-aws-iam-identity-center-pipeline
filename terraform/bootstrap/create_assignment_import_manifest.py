@@ -81,9 +81,9 @@ if __name__ == "__main__":
     try:
         # Get all accounts via paginating
         all_accounts = []
-        next_token = None
+        next_token = ""
         while True:
-            response = org_client.list_accounts(nextToken=next_token)
+            response = org_client.list_accounts(NextToken=next_token)
             accounts = response["Accounts"]
             all_accounts.extend(accounts)
     
