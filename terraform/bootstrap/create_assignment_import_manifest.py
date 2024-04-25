@@ -79,14 +79,26 @@ if __name__ == "__main__":
         "MasterAccountId"
     ]
     try:
+        # Get all accounts via paginating
+        all_accounts = []
+        next_token = None
+        while True:
+            response = org_client.list_accounts(next_token=next_token)
+            accounts = response["Accounts"]
+            all_accounts.extend(accounts)
+    
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+                
         audit_account_id = [
             acc["Id"]
-            for acc in org_client.list_accounts()["Accounts"]
+            for acc in all_accounts
             if acc["Name"] == audit_account_name
         ][0]
         log_archive_id = [
             acc["Id"]
-            for acc in org_client.list_accounts()["Accounts"]
+            for acc in all_accounts
             if acc["Name"] == log_archive_account_name
         ][0]
     except Exception:
