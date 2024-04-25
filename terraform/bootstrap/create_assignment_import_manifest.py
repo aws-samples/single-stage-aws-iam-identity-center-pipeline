@@ -83,7 +83,7 @@ if __name__ == "__main__":
         all_accounts = []
         next_token = None
         while True:
-            response = org_client.list_accounts(next_token=next_token)
+            response = org_client.list_accounts(nextToken=next_token)
             accounts = response["Accounts"]
             all_accounts.extend(accounts)
     
