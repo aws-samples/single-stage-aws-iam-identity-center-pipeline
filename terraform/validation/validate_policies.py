@@ -12,7 +12,7 @@ import json
 import logging
 
 
-def validate_policies():
+def validate_policies(fail_on_types=["SECURITY_WARNING", "ERROR"]):
     """
     Returns true if all files pass validation. Otherwise, false.
     """
@@ -34,10 +34,7 @@ def validate_policies():
             )["findings"]
             filtered_findings = []
             for finding in findings:
-                if (
-                    finding["findingType"] == "SECURITY_WARNING"
-                    or finding["findingType"] == "ERROR"
-                ):
+                if finding["findingType"] in fail_on_types:
                     del finding[
                         "locations"
                     ]  # Remove overly verbose location information
