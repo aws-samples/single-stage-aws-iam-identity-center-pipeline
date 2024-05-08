@@ -81,28 +81,24 @@ if __name__ == "__main__":
     try:
         # Get all accounts via paginating
         all_accounts = []
-        
+
         # Do the first run
         initial_response = org_client.list_accounts()
         all_accounts.extend(initial_response["Accounts"])
         next_token = initial_response.get("NextToken")
-        
+
         # Do the subsequent runs as necessary
         while next_token:
             response = org_client.list_accounts(NextToken=next_token)
             all_accounts.extend(response["Accounts"])
 
             next_token = response.get("NextToken")
-                
+
         audit_account_id = [
-            acc["Id"]
-            for acc in all_accounts
-            if acc["Name"] == audit_account_name
+            acc["Id"] for acc in all_accounts if acc["Name"] == audit_account_name
         ][0]
         log_archive_id = [
-            acc["Id"]
-            for acc in all_accounts
-            if acc["Name"] == log_archive_account_name
+            acc["Id"] for acc in all_accounts if acc["Name"] == log_archive_account_name
         ][0]
     except Exception:
         raise Exception(
@@ -133,6 +129,15 @@ if __name__ == "__main__":
     # Walk through all accounts in Identity Center, finding how each permission set is assigned
     for account in [acc["Id"] for acc in org_client.list_accounts()["Accounts"]]:
         logging.info(f"Processing account {account}...")
+        # If the account is suspended, skip it
+        account_response = org_client.describe_account(AccountId=account)["Account"]
+        account_status = account_response["Status"]
+        account_name = account_response["Name"]
+        if account_status == "SUSPENDED":
+            logging.warning(
+                f"Account {account_name} is suspended and will not be processed"
+            )
+            continue
         # Flag any attachments for the management account, since the delegated administrator cannot manage it
         is_in_management_account = False
         if account == management_account:
@@ -289,9 +294,13 @@ import {{
     output = {}
     for tf_index in assignment_dict:
         account_target = assignment_dict[tf_index]["details"]["target_id"]
-        account_target_name = org_client.describe_account(AccountId=account_target)[
-            "Account"
-        ]["Name"]
+        describe_account_response = org_client.describe_account(
+            AccountId=account_target
+        )["Account"]
+        account_target_name = describe_account_response["Name"]
+        if describe_account_response["Status"] == "SUSPENDED":
+            logging.warning(f"Skipping SUSPENDED account named {account_target_name}")
+            continue
         principal_name = assignment_dict[tf_index]["details"]["principal_name"]
         permission_set_name = assignment_dict[tf_index]["details"][
             "permission_set_name"
