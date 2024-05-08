@@ -28,6 +28,7 @@ import logging
 import re
 from .validate_policies import validate_policies
 from collections import Counter
+from typing import List
 
 """
 Arguments used by the script if invoked directory
@@ -246,7 +247,11 @@ def validate_management_permission_set_isolation(
             exit(1)
 
 
-def main(permission_set_templates_path, assignment_templates_path):
+def main(
+    permission_set_templates_path,
+    assignment_templates_path,
+    fail_on_types: List[str],
+):
     print("########################################")
     print("# Starting AWS SSO Template Validation #")
     print("########################################\n")
@@ -260,7 +265,7 @@ def main(permission_set_templates_path, assignment_templates_path):
     validate_json_policy_format(permission_set_templates)
     validate_managed_policies_arn(permission_set_templates)
     validate_management_permission_set_isolation(assignments_templates)
-    if validate_policies() == False:
+    if validate_policies(fail_on_types=fail_on_types) == False:
         log.error("Policies failed validation. Review findings and correct them.")
         exit(1)
 
@@ -282,10 +287,17 @@ if __name__ == "__main__":
         dest="asFolder",
         default="./assignments/templates",
     )
+    parser.add_argument(
+        "--fail-on-types",
+        default=["SECURITY_WARNING", "ERROR"],
+        help="The types of policy findings that should cause the script to fail."
+    )
     args = parser.parse_args()
     permission_set_templates_path = args.psFolder
     assignment_templates_path = args.asFolder
+    fail_on_types = args.fail_on_types
     main(
         permission_set_templates_path=permission_set_templates_path,
         assignment_templates_path=assignment_templates_path,
+        fail_on_types=fail_on_types,
     )

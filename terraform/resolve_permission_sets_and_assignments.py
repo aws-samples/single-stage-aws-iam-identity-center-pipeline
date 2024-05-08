@@ -739,10 +739,16 @@ def main():
         required=False,
         help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
     )
+    parser.add_argument(
+        "--fail-on-types",
+        default=["SECURITY_WARNING", "ERROR"],
+        help="The types of policy findings that should cause the script to fail.",
+    )
     args = parser.parse_args()
     templates_relative_path = args.templates_relative_path
     permission_sets_template_relative_path = args.permission_sets_template_relative_path
     mgmt_only = args.mgmt_only
+    fail_on_types = args.fail_on_types
     region = args.region
     if region is not None:
         boto_config = Config(region_name=region)
@@ -771,6 +777,7 @@ def main():
     iam_identitycenter_validation.main(
         permission_set_templates_path=permission_sets_template_relative_path,
         assignment_templates_path=templates_relative_path,
+        fail_on_types=fail_on_types,
     )
 
     print("#######################################")
