@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import shutil
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,8 +47,14 @@ if __name__ == "__main__":  # Get Identity Store and SSO Instance ARN
         required=True,
         help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
     )
+    parser.add_argument(
+        "--non-delegated-admin-mode",
+        help="Specify this flag if you are running from the management account instead of the delegated admin account. Default is delegated admin.",
+        action="store_true",
+    )
     args = parser.parse_args()
     region = args.region
+    delegated_admin_mode = not bool(args.non_delegated_admin_mode)
     # These permission sets are created by Control Tower and should not be imported.
     control_tower_permission_set_names = [
         "AWSOrganizationsFullAccess",
@@ -282,3 +290,18 @@ import {{
         new_file = os.path.join(PS_TEMPLATE_DIRECTORY, f"{permission_set_name}.json")
         with open(new_file, "w") as file:
             file.write(json.dumps(json_contents, indent=4))
+
+    # If running in delegated-admin mode (default), delete the management folder and move the members to the parent folder
+    if delegated_admin_mode:
+        my_dir = os.getcwd()
+        shutil.rmtree(os.path.join(my_dir, MGMT_IMPORTS_DIR))
+        for file in os.listdir(os.path.join(my_dir, MEMBER_IMPORTS_DIR)):
+            if os.path.isdir(file):
+                continue
+            full_path_source = os.path.join(my_dir, MEMBER_IMPORTS_DIR, file)
+            full_path_target = os.path.join(my_dir, file)
+            shutil.move(
+                full_path_source,
+                full_path_target,
+            )
+        shutil.rmtree(os.path.join(my_dir, MEMBER_IMPORTS_DIR))

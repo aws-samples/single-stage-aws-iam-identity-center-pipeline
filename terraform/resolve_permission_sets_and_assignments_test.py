@@ -520,18 +520,20 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             ]
         }
 
-        test_response_ou = (
+        test_response_ou, _ = (
             resolve_permission_sets_and_assignments.list_accounts_in_identifier(
                 ou_identifier="ou-12345678",
                 all_accounts_map=accounts_map,
                 boto_config=self.mock_boto_config,
+                identifier_cache={},
             )
         )
-        test_response_root = (
+        test_response_root, _ = (
             resolve_permission_sets_and_assignments.list_accounts_in_identifier(
                 ou_identifier="r-12345",
                 all_accounts_map=accounts_map,
                 boto_config=self.mock_boto_config,
+                identifier_cache={},
             )
         )
         self.assertEqual(test_response_ou, ["111111111111"])
