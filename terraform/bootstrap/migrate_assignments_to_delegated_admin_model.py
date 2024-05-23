@@ -3,6 +3,8 @@ import boto3
 import logging
 import argparse
 
+# Documentation for this script is in the main() function
+
 # Set log level to INFO
 logging.basicConfig(level=logging.INFO)
 
