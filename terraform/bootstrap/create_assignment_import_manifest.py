@@ -126,8 +126,17 @@ if __name__ == "__main__":
         if not next_token:
             break
 
+    # Get all accounts in the org, using pagination
+    next_token = ""  # nosec
+    all_accounts = []
+    while True:
+        response = org_client.list_accounts(NextToken=next_token)
+        all_accounts.extend(response["Accounts"])
+        next_token = response.get("NextToken")
+        if not next_token:
+            break
     # Walk through all accounts in Identity Center, finding how each permission set is assigned
-    for account in [acc["Id"] for acc in org_client.list_accounts()["Accounts"]]:
+    for account in [acc["Id"] for acc in all_accounts]:
         logging.info(f"Processing account {account}...")
         # If the account is suspended, skip it
         account_response = org_client.describe_account(AccountId=account)["Account"]
@@ -162,11 +171,21 @@ if __name__ == "__main__":
             is_log_archive_account = False
         # Walk through all permission sets and find their associated account assignments
         for p_set_arn in all_permission_set_arns:
-            account_assignments = sso_client.list_account_assignments(
-                InstanceArn=ssoInstanceArn,
-                AccountId=account,
-                PermissionSetArn=p_set_arn,
-            )["AccountAssignments"]
+            # Get all account assignments for this permission set, using pagination
+            next_token = ""  # nosec
+            account_assignments = []
+            while True:
+                response = sso_client.list_account_assignments(
+                    InstanceArn=ssoInstanceArn,
+                    AccountId=account,
+                    PermissionSetArn=p_set_arn,
+                    MaxResults=100,
+                    NextToken=next_token,
+                )
+                account_assignments.extend(response["AccountAssignments"])
+                next_token = response.get("NextToken")
+                if not next_token:
+                    break
             # Generate the import string that Terraform expects
             for account_assignment in account_assignments:
                 # This check is added to catch issues where users are deleted without being unassigned, resulting in dangling references
