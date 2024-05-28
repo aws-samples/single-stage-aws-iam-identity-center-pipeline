@@ -2,18 +2,19 @@ import argparse
 import boto3
 import logging
 import argparse
+from botocore.config import Config
 
 # Documentation for this script is in the main() function
+# This script is intended to be run from the management account.
 
 # Set log level to INFO
 logging.basicConfig(level=logging.INFO)
 
-
-def get_log_archive_audit_accounts():
+def get_log_archive_audit_accounts(boto3_config):
     """
     This function will retrieve the log archive and audit account IDs from Control Tower
     """
-    ct_client = boto3.client("controltower")
+    ct_client = boto3.client("controltower", config=boto3_config)
     lz_arn = ct_client.list_landing_zones()["landingZones"][0]["arn"]
     lz_manifest = ct_client.get_landing_zone(landingZoneIdentifier=lz_arn)[
         "landingZone"
@@ -25,6 +26,7 @@ def get_log_archive_audit_accounts():
 
 def get_management_permisson_sets(
     management_account_id: str,
+    boto3_config,
 ):
     """
     This function will return all permission set ARNs used by the management account.
@@ -40,7 +42,7 @@ def get_management_permisson_sets(
         "AWSReadOnlyAccess",
     ]
 
-    sso_client = boto3.client("sso-admin")
+    sso_client = boto3.client("sso-admin", config=boto3_config)
     non_ct_permisson_sets = []
     ct_permisson_sets = []
     instance_arn = sso_client.list_instances()["Instances"][0]["InstanceArn"]
@@ -71,11 +73,11 @@ def get_management_permisson_sets(
     return non_ct_permisson_sets, ct_permisson_sets
 
 
-def duplicate_permisson_set(old_permisson_set_arn, new_suffix):
+def duplicate_permisson_set(old_permisson_set_arn, new_suffix, boto3_config):
     """
     This function will create a copy of a permission set with a suffix appended and return the ARN of the new permission set.
     """
-    sso_client = boto3.client("sso-admin")
+    sso_client = boto3.client("sso-admin", config=boto3_config)
     instance_arn = sso_client.list_instances()["Instances"][0]["InstanceArn"]
     old_permisson_set = sso_client.describe_permission_set(
         InstanceArn=instance_arn,
@@ -140,8 +142,8 @@ def duplicate_permisson_set(old_permisson_set_arn, new_suffix):
     return new_permisson_set_arn
 
 
-def get_principal_name(assignment, identity_store_id):
-    identity_store_client = boto3.client("identitystore")
+def get_principal_name(assignment, identity_store_id, boto3_config):
+    identity_store_client = boto3.client("identitystore", config=boto3_config)
     if assignment["PrincipalType"] == "GROUP":
         return identity_store_client.describe_group(
             IdentityStoreId=identity_store_id,
@@ -158,13 +160,14 @@ def migrate_account_assignment(
     assignment,
     new_ps_arn,
     target_account,
+    boto3_config,
 ):
     """
     This function will take an account assignment for a legacy permission set and migrate it to a management-specific permission set.
 
     It will first create the new account assignment and then delete the old account assignment.
     """
-    sso_client = boto3.client("sso-admin")
+    sso_client = boto3.client("sso-admin", config=boto3_config)
     instances_response = sso_client.list_instances()
     instance_arn = instances_response["Instances"][0]["InstanceArn"]
     identity_store_id = instances_response["Instances"][0]["IdentityStoreId"]
@@ -180,6 +183,7 @@ def migrate_account_assignment(
     principal_name = get_principal_name(
         assignment=assignment,
         identity_store_id=identity_store_id,
+        boto3_config=boto3_config
     )
     principal_type = assignment["PrincipalType"]
     logging.info(
@@ -246,8 +250,8 @@ def is_managed_by_control_tower(
     return f"{principal_name}|{permission_set}" in ct_assignment_strings
 
 
-def get_permission_set_name_to_arn_map():
-    sso_client = boto3.client("sso-admin")
+def get_permission_set_name_to_arn_map(boto3_config):
+    sso_client = boto3.client("sso-admin", config=boto3_config)
     instances_response = sso_client.list_instances()
     instance_arn = instances_response["Instances"][0]["InstanceArn"]
     permission_sets = sso_client.list_permission_sets(InstanceArn=instance_arn)[
@@ -263,7 +267,7 @@ def get_permission_set_name_to_arn_map():
     return permission_set_name_to_arn_map
 
 
-def main(read_only):
+def main(read_only, region):
     """
     This script is intended to be run from the management account.
 
@@ -284,8 +288,9 @@ def main(read_only):
     2. These changes are occurring outside of IAC, meaning that you will need to update IAC code to match these changes; you can use the import scripts in the `bootstrap` folder to accelerate the IAC changes.
     3. This script will not update any permission sets or assignments that are owned by Control Tower. It *will* update customer-managed assignments that use CT-owned permission sets.
     """
+    boto3_config = Config(region_name=region)
     # Get the management account ID
-    management_account_id = boto3.client("organizations").describe_organization()[
+    management_account_id = boto3.client("organizations", config=boto3_config).describe_organization()[
         "Organization"
     ]["MasterAccountId"]
 
@@ -295,7 +300,7 @@ def main(read_only):
     )
 
     # Get the instance ARN
-    sso_client = boto3.client("sso-admin")
+    sso_client = boto3.client("sso-admin", config=boto3_config)
     instance_arn = sso_client.list_instances()["Instances"][0]["InstanceArn"]
 
     # Create management-only permission sets and migrate management assignments to them
@@ -305,7 +310,7 @@ def main(read_only):
                 f"Skipping migration of permission set {permisson_set_arn} because read_only is set to True"
             )
             continue
-        new_permisson_set_arn = duplicate_permisson_set(permisson_set_arn, "_MGMTACCT")
+        new_permisson_set_arn = duplicate_permisson_set(permisson_set_arn, "_MGMTACCT", boto3_config)
         account_assignments = sso_client.list_account_assignments(
             AccountId=management_account_id,
             InstanceArn=instance_arn,
@@ -316,11 +321,12 @@ def main(read_only):
                 assignment=account_assignment,
                 new_ps_arn=new_permisson_set_arn,
                 target_account=management_account_id,
+                boto3_config=boto3_config,
             )
 
     # Review member accounts that are using CT permission sets and migrate them to member-only permission sets
-    log_archive_account, audit_account = get_log_archive_audit_accounts()
-    permission_set_name_to_arn_map = get_permission_set_name_to_arn_map()
+    log_archive_account, audit_account = get_log_archive_audit_accounts(boto3_config)
+    permission_set_name_to_arn_map = get_permission_set_name_to_arn_map(boto3_config)
     for ct_permisson_set_arn in ct_permisson_set_arns:
         # Get the permission set name and print a log
         permission_set_name = sso_client.describe_permission_set(
@@ -374,9 +380,10 @@ def main(read_only):
                     identity_store_id=sso_client.list_instances()["Instances"][0][
                         "IdentityStoreId"
                     ],
+                    boto3_config=boto3_config
                 )
                 # Get account email
-                account_email = boto3.client("organizations").describe_account(
+                account_email = boto3.client("organizations", config=boto3_config).describe_account(
                     AccountId=account_with_ct_permission_set_provisioned
                 )["Account"]["Email"]
                 # Check if the assignment is owned by CT
@@ -400,7 +407,7 @@ def main(read_only):
                     # Create a copy of the permission set, if necessary
                     try:
                         new_permission_set_arn = duplicate_permisson_set(
-                            ct_permisson_set_arn, "_MEMBER"
+                            ct_permisson_set_arn, "_MEMBER", boto3_config
                         )
                         permission_set_name_to_arn_map[
                             f"{permission_set_name}_MEMBER"
@@ -414,11 +421,16 @@ def main(read_only):
                         assignment=account_assignment,
                         new_ps_arn=new_permission_set_arn,
                         target_account=account_assignment["AccountId"],
+                        boto3_config=boto3_config
                     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--region",
+        help="Region in which to run this script",
+    )
     parser.add_argument(
         "--read-only",
         action="store_true",
@@ -426,4 +438,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     read_only = args.read_only
-    main(read_only)
+    region = args.region
+    main(
+        read_only=read_only,
+        region=region,
+    )
