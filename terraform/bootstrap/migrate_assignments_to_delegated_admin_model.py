@@ -10,6 +10,7 @@ from botocore.config import Config
 # Set log level to INFO
 logging.basicConfig(level=logging.INFO)
 
+
 def get_log_archive_audit_accounts(boto3_config):
     """
     This function will retrieve the log archive and audit account IDs from Control Tower
@@ -183,7 +184,7 @@ def migrate_account_assignment(
     principal_name = get_principal_name(
         assignment=assignment,
         identity_store_id=identity_store_id,
-        boto3_config=boto3_config
+        boto3_config=boto3_config,
     )
     principal_type = assignment["PrincipalType"]
     logging.info(
@@ -290,13 +291,14 @@ def main(read_only, region):
     """
     boto3_config = Config(region_name=region)
     # Get the management account ID
-    management_account_id = boto3.client("organizations", config=boto3_config).describe_organization()[
-        "Organization"
-    ]["MasterAccountId"]
+    management_account_id = boto3.client(
+        "organizations", config=boto3_config
+    ).describe_organization()["Organization"]["MasterAccountId"]
 
     # Get all permission sets, broken out by Control Tower ownership
     non_ct_permisson_set_arns, ct_permisson_set_arns = get_management_permisson_sets(
         management_account_id=management_account_id,
+        boto3_config=boto3_config,
     )
 
     # Get the instance ARN
@@ -310,7 +312,9 @@ def main(read_only, region):
                 f"Skipping migration of permission set {permisson_set_arn} because read_only is set to True"
             )
             continue
-        new_permisson_set_arn = duplicate_permisson_set(permisson_set_arn, "_MGMTACCT", boto3_config)
+        new_permisson_set_arn = duplicate_permisson_set(
+            permisson_set_arn, "_MGMTACCT", boto3_config
+        )
         account_assignments = sso_client.list_account_assignments(
             AccountId=management_account_id,
             InstanceArn=instance_arn,
@@ -380,12 +384,18 @@ def main(read_only, region):
                     identity_store_id=sso_client.list_instances()["Instances"][0][
                         "IdentityStoreId"
                     ],
-                    boto3_config=boto3_config
+                    boto3_config=boto3_config,
                 )
                 # Get account email
-                account_email = boto3.client("organizations", config=boto3_config).describe_account(
+                account_email = boto3.client(
+                    "organizations", config=boto3_config
+                ).describe_account(
                     AccountId=account_with_ct_permission_set_provisioned
-                )["Account"]["Email"]
+                )[
+                    "Account"
+                ][
+                    "Email"
+                ]
                 # Check if the assignment is owned by CT
                 if is_managed_by_control_tower(
                     principal_name=principal_name,
@@ -421,7 +431,7 @@ def main(read_only, region):
                         assignment=account_assignment,
                         new_ps_arn=new_permission_set_arn,
                         target_account=account_assignment["AccountId"],
-                        boto3_config=boto3_config
+                        boto3_config=boto3_config,
                     )
 
 
