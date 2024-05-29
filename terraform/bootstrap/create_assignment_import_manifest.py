@@ -17,6 +17,20 @@ IMPORTS_FILENAME = os.path.join(".", "import_assignments.tf")
 TEMPLATE_OUTPUT_DIRECTORY = "./source/assignments/templates"
 
 
+def get_log_archive_audit_accounts(boto3_config):
+    """
+    This function will retrieve the log archive and audit account IDs from Control Tower
+    """
+    ct_client = boto3.client("controltower", config=boto3_config)
+    lz_arn = ct_client.list_landing_zones()["landingZones"][0]["arn"]
+    lz_manifest = ct_client.get_landing_zone(landingZoneIdentifier=lz_arn)[
+        "landingZone"
+    ]["manifest"]
+    log_archive_account_id = lz_manifest["centralizedLogging"]["accountId"]
+    audit_account_id = lz_manifest["securityRoles"]["accountId"]
+    return log_archive_account_id, audit_account_id
+
+
 def is_managed_by_control_tower(
     principal_name,
     permission_set,
@@ -78,32 +92,12 @@ if __name__ == "__main__":
     management_account = org_client.describe_organization()["Organization"][
         "MasterAccountId"
     ]
-    try:
-        # Get all accounts via paginating
-        all_accounts = []
 
-        # Do the first run
-        initial_response = org_client.list_accounts()
-        all_accounts.extend(initial_response["Accounts"])
-        next_token = initial_response.get("NextToken")
+    # Get Audit and Log Archive Account IDs from Control Tower
+    log_archive_id, audit_account_id = get_log_archive_audit_accounts(
+        boto3_config=config,
+    )
 
-        # Do the subsequent runs as necessary
-        while next_token:
-            response = org_client.list_accounts(NextToken=next_token)
-            all_accounts.extend(response["Accounts"])
-
-            next_token = response.get("NextToken")
-
-        audit_account_id = [
-            acc["Id"] for acc in all_accounts if acc["Name"] == audit_account_name
-        ][0]
-        log_archive_id = [
-            acc["Id"] for acc in all_accounts if acc["Name"] == log_archive_account_name
-        ][0]
-    except Exception:
-        raise Exception(
-            "Unable to identify audit/log archive accounts, make sure you are specifying the right names for them."
-        )
     # Get SSO instance info
     response = sso_client.list_instances()
     ssoInstanceArn = response["Instances"][0]["InstanceArn"]

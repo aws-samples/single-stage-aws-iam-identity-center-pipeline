@@ -307,9 +307,13 @@ def main(read_only, region):
 
     # Create management-only permission sets and migrate management assignments to them
     for permisson_set_arn in non_ct_permisson_set_arns:
+        ps_name = sso_client.describe_permission_set(
+            InstanceArn=instance_arn,
+            PermissionSetArn=permisson_set_arn,
+        )["PermissionSet"]["Name"]
         if read_only:
             print(
-                f"Skipping migration of permission set {permisson_set_arn} because read_only is set to True"
+                f"Skipping migration of permission set {ps_name} (ARN: {permisson_set_arn}) because read_only is set to True"
             )
             continue
         new_permisson_set_arn = duplicate_permisson_set(
