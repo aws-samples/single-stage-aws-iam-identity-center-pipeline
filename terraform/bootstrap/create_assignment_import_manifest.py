@@ -115,9 +115,13 @@ if __name__ == "__main__":
         {}
     )  # assignment dict for existing management account assignments
     # Get all permission sets
-    next_token = ""  # nosec
     all_permission_set_arns = []
-    while True:
+    first_response = sso_client.list_permission_sets(
+        InstanceArn=ssoInstanceArn, MaxResults=100
+    )
+    all_permission_set_arns.extend(first_response["PermissionSets"])
+    next_token = first_response.get("NextToken")
+    while next_token:
         response = sso_client.list_permission_sets(
             InstanceArn=ssoInstanceArn, MaxResults=100, NextToken=next_token
         )
@@ -127,9 +131,11 @@ if __name__ == "__main__":
             break
 
     # Get all accounts in the org, using pagination
-    next_token = ""  # nosec
     all_accounts = []
-    while True:
+    first_response = org_client.list_accounts()
+    all_accounts.extend(first_response["Accounts"])
+    next_token = first_response.get("NextToken")
+    while next_token:
         response = org_client.list_accounts(NextToken=next_token)
         all_accounts.extend(response["Accounts"])
         next_token = response.get("NextToken")
