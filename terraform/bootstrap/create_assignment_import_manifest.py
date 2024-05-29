@@ -178,9 +178,16 @@ if __name__ == "__main__":
         # Walk through all permission sets and find their associated account assignments
         for p_set_arn in all_permission_set_arns:
             # Get all account assignments for this permission set, using pagination
-            next_token = ""  # nosec
             account_assignments = []
-            while True:
+            first_response = sso_client.list_account_assignments(
+                InstanceArn=ssoInstanceArn,
+                AccountId=account,
+                PermissionSetArn=p_set_arn,
+                MaxResults=100,
+            )
+            account_assignments.extend(first_response["AccountAssignments"])
+            next_token = first_response.get("NextToken")
+            while next_token:
                 response = sso_client.list_account_assignments(
                     InstanceArn=ssoInstanceArn,
                     AccountId=account,
