@@ -64,22 +64,8 @@ if __name__ == "__main__":
         required=True,
         help="The name of the AWS region your Identity Center lives in (eg. us-east-1)",
     )
-    parser.add_argument(
-        "--log-archive-account-name",
-        type=str,
-        default="Log Archive",
-        help="The name of the Log Archive account in your organization",
-    )
-    parser.add_argument(
-        "--audit-account-name",
-        type=str,
-        default="Audit",
-        help="The name of the Audit account in your organization",
-    )
     args = parser.parse_args()
     region = args.region
-    log_archive_account_name = args.log_archive_account_name
-    audit_account_name = args.audit_account_name
     # Config to handle throttling
     config = Config(
         retries={"max_attempts": 10, "mode": "adaptive"},
