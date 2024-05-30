@@ -12,13 +12,16 @@ import json
 import logging
 
 
-def validate_policies(fail_on_types=["SECURITY_WARNING", "ERROR"]):
+def validate_policies(
+    fail_on_types=["SECURITY_WARNING", "ERROR"],
+    permission_sets_path_identifier: str = "./source/permission_sets/templates/*.json",
+):
     """
     Returns true if all files pass validation. Otherwise, false.
     """
     bad_files = []
     access_analyzer_client = boto3.client("accessanalyzer")
-    files = glob.glob("./source/permission_sets/templates/*.json")
+    files = glob.glob(permission_sets_path_identifier)
     for file in files:
         with open(file, "r") as f:
             policy_raw = f.read()

@@ -289,6 +289,7 @@ def main(read_only, region):
     1. Permission set names, and therefore SSO role names, will change. This may have implications for SCPs that use SSO roles in condition keys; be ready to update SCPs based on these changes.
     2. These changes are occurring outside of IAC, meaning that you will need to update IAC code to match these changes; you can use the import scripts in the `bootstrap` folder to accelerate the IAC changes.
     3. This script will not update any permission sets or assignments that are owned by Control Tower. It *will* update customer-managed assignments that use CT-owned permission sets.
+    4. This script may break any existing automation that creates SSO account assignments outside of IaC (some AFT implementations, for example, create SSO roles for new accounts). 
     """
     boto3_config = Config(region_name=region)
     # Get the management account ID
@@ -307,6 +308,7 @@ def main(read_only, region):
     instance_arn = sso_client.list_instances()["Instances"][0]["InstanceArn"]
 
     # Create management-only permission sets and migrate management assignments to them
+    migrated_permission_set_names = []
     for permisson_set_arn in non_ct_permisson_set_arns:
         ps_name = sso_client.describe_permission_set(
             InstanceArn=instance_arn,
@@ -332,6 +334,13 @@ def main(read_only, region):
                 target_account=management_account_id,
                 boto3_config=boto3_config,
             )
+        migrated_permission_set_names.append(ps_name)
+    print(
+        f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
+    )
+    print(
+        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {"\n".join(migrated_permission_set_names)}"
+    )
 
     # Review member accounts that are using CT permission sets and migrate them to member-only permission sets
     log_archive_account, audit_account = get_log_archive_audit_accounts(boto3_config)
@@ -438,7 +447,13 @@ def main(read_only, region):
                         target_account=account_assignment["AccountId"],
                         boto3_config=boto3_config,
                     )
-
+    print(f"[ACTION REQUIRED] In case you missed it the first time...")
+    print(
+        f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
+    )
+    print(
+        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {"\n".join(migrated_permission_set_names)}"
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

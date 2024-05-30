@@ -18,17 +18,17 @@
 ## +-----------------------------------
 
 import boto3
-import botocore
 import glob
 import json
 import argparse
-import sys
 import os
 import logging
 import re
 from .validate_policies import validate_policies
 from collections import Counter
 from typing import List
+from botocore.exceptions import ClientError
+
 
 """
 Arguments used by the script if invoked directory
@@ -70,7 +70,7 @@ def list_assignment_folder(assignment_templates_path):
     return assig_dic
 
 
-def validate_unique_permissionset_name(permission_set_templates):
+def validate_unique_permission_set_name(permission_set_templates):
     list_of_permission_set_name = []
     for permissionSet in permission_set_templates:
         try:
@@ -94,11 +94,13 @@ def validate_unique_permissionset_name(permission_set_templates):
     return True
 
 
-def validate_unique_assignment_identifiers(assignments_templates):
+def validate_assignments_have_unique_identifiers(assignments_templates):
     """
+    This function checks if the assignments have unique identifiers.
     Identifiers here refers to the combination of target, principal, and permission set
-    If all 3 are the same, that indicates some sort of issue.
+    If all 3 are the same, that indicates a duplicate that should be deduplicated.
     """
+    duplicates = []
     list_of_identifiers = []
     for eachAssignment in assignments_templates["Assignments"]:
         identifier_string = f"{eachAssignment['Target']}|{eachAssignment['PrincipalId']}|{eachAssignment['PermissionSetName']}"
@@ -111,140 +113,193 @@ def validate_unique_assignment_identifiers(assignments_templates):
         counter = Counter(list_of_identifiers)
         duplicates = [item for item, count in counter.items() if count > 1]
         log.error(f"Duplicate Identifiers: {duplicates}")
-        exit(1)
-    log.info("No asignment templates with the same identifiers were detected.")
+    else:
+        log.info(
+            "No asignment templates with the same identifiers were detected. Good!"
+        )
+    return duplicates
+
+
+# Commented out because this is duplicative of the validate_policies.py helper script
+# def validate_json_policy_format(permission_set_template):
+#     """
+#     Returns a list of errors
+#     """
+#     errors = []
+#     client = boto3.client("accessanalyzer")
+#     permission_set_object = json.dumps(permission_set_template)
+#     permission_set_name = permission_set_object["Name"]
+
+#     if "CustomPolicy" not in permission_set_object:
+#         log.info(f"No inline policy present in permission set {permission_set_name}.")
+#     else:
+#         log.info(f"Analyzing inline policies for permission set {permission_set_name}.")
+#         custom_policy = json.dumps(permission_set_template["CustomPolicy"])
+
+#         # Get all findings from IAM Access Analyzer
+#         all_findings = []
+#         response = client.validate_policy(
+#             locale="EN",
+#             policyDocument=custom_policy,
+#             policyType="IDENTITY_POLICY",
+#         )
+#         all_findings.extend(response["findings"])
+#         next_token = response["NextToken"]
+#         while next_token:
+#             response = client.validate_policy(
+#                 locale="EN",
+#                 policyDocument=custom_policy,
+#                 policyType="IDENTITY_POLICY",
+#                 NextToken=response["NextToken"],
+#             )
+#             all_findings.extend(response["findings"])
+
+#         # Loop over the findings and handle as appropriate
+#         for each_finding in all_findings:
+#             if each_finding["findingType"] == "ERROR":
+#                 finding_string = (
+#                     f"[{permission_set_name}] An error was found in the custom policy: "
+#                     + str(each_finding["findingDetails"])
+#                 )
+#                 log.error(finding_string)
+#                 errors.append(finding_string)
+
+#             if each_finding["findingType"] == "WARNING":
+#                 log.warning(
+#                     f"[{permission_set_name}] A warning was found in the custom policy: "
+#                     + str(each_finding["findingDetails"])
+#                 )
+#     return errors
+
+
+def validate_managed_policies_arn(permission_set_template, current_account_id):
+    """
+    Returns a list of errors in managed policies and permission boundaries.
+    """
+    errors = []
+    permission_set_object = json.dumps(permission_set_template)
+    permission_set_name = permission_set_object["Name"]
+
+    client = boto3.client("iam")
+    try:
+        # This basically checks whether the managed policy exists
+        log.info(
+            f"Analyzing the permission set managed policies for permission set {permission_set_name}."
+        )
+        for each_managed_policy in permission_set_object["ManagedPolicies"]:
+            _ = client.get_policy(PolicyArn=each_managed_policy)
+    # Handle when resource is not found
+    except ClientError as error:
+        if error.response["Error"]["Code"] == "NoSuchEntity":
+            error_string = (
+                f"[{permission_set_name}] An issue was found in the managed policy. Reason: "
+                + str(error)
+            )
+            log.error(error_string)
+            errors.append(error_string)
+        else:
+            # Unknown Client Error
+            raise error
+
+    try:
+        log.info(
+            f"[{permission_set_name}] Analyzing permission boundary policies from permission set"
+        )
+        customer_permission_boundary_object = permission_set_object.get(
+            "CustomerPermissionBoundary", {}
+        )
+        if re.match(r"^arn:aws", customer_permission_boundary_object["Name"]):
+            error_string = f"[{permission_set_name}] You specified an permission boundary ARN instead of name. Please specify a name."
+            log.error(error_string)
+            errors.append(error_string)
+        elif customer_permission_boundary_object:
+            _ = client.get_policy(
+                f"arn:aws:iam::{current_account_id}:policy/{customer_permission_boundary_object['Path']}{customer_permission_boundary_object['Name']}"
+            )
+    except Exception as error:
+        error_string = log.error(
+            f"[{permission_set_name}] An issue was found in the AWS managed permission boundary policy. Reason: "
+            + str(error)
+        )
+        log.error(error_string)
+        errors.append(error_string)
+    return errors
+
+
+def validate_management_permission_sets_are_isolated(
+    # An SSO account assignment object
+    assignment_template,
+    # The ID of the management account
+    management_account_id,
+    # The identifier used to identify management permission sets
+    managementIdentifierRegex=r"MGMTACCT",
+):
+    """
+    Returns True if the given assignment is using an appropriate permission set ()
+    False if management permission sets are assigned to non-management accounts.
+    Otherwise returns True
+    """
+    invalid_assignments = []
+    account_target = assignment_template["Target"][0]
+    is_mgmt_permisision_set = bool(
+        re.search(managementIdentifierRegex, assignment_template["PermissionSetName"])
+    )
+    # A mismatch of permission sets and assignments indicates a problematic, fail-worthy build
+    if (account_target == management_account_id) != is_mgmt_permisision_set:
+        disposition_string = "is not the management account"
+        if account_target == management_account_id:
+            disposition_string = "is the management account"
+        error_message = f"The permission set '{assignment_template['PermissionSetName']}' is assigned to the account '{account_target}', which {disposition_string}. Please review your template."
+        log.error(error_message)
+        invalid_assignments.append(error_message)
     return True
 
 
-def validate_json_policy_format(permission_set_templates):
-    log.info("Analyzing each one of the permission set custom policies.")
-    client = boto3.client("accessanalyzer")
+def validate_no_control_tower_psets_used_in_member_accounts(assignment_template):
+    """
+    Returns a list of all the given assignments that are using a Control Tower-managed permission set.
 
-    for eachPermissionSet in permission_set_templates:
-        if "CustomPolicy" in json.dumps(permission_set_templates[eachPermissionSet]):
-            thereIsCustomPolicy = json.dumps(
-                permission_set_templates[eachPermissionSet]["CustomPolicy"]
-            )
-            if len(thereIsCustomPolicy) > 2:
-                log.info(f"[{eachPermissionSet}] Analyzing custom policy")
-                response = client.validate_policy(
-                    locale="EN",
-                    policyDocument=json.dumps(
-                        permission_set_templates[eachPermissionSet]["CustomPolicy"]
-                    ),
-                    policyType="IDENTITY_POLICY",
-                )
-                results = response["findings"]
-
-                while "NextToken" in response:
-                    response = client.validate_policy(
-                        locale="PT_BR",
-                        policyDocument=json.dumps(
-                            permission_set_templates[eachPermissionSet]["CustomPolicy"]
-                        ),
-                        policyType="IDENTITY_POLICY",
-                        NextToken=response["NextToken"],
-                    )
-                    results.extend(response["findings"])
-
-                for eachFinding in results:
-                    if eachFinding["findingType"] == "ERROR":
-                        log.error(
-                            f"[{eachPermissionSet}] An error was found in the custom policy: "
-                            + str(eachFinding["findingDetails"])
-                        )
-                        exit(1)
-                    if eachFinding["findingType"] == "WARNING":
-                        log.warning(
-                            f"[{eachPermissionSet}] An issue was found in the custom policy: "
-                            + str(eachFinding["findingDetails"])
-                        )
-            else:
-                log.info(
-                    f"[{eachPermissionSet}] There is no Custom Policy in the permission set. Skipping"
-                )
+    Control Tower permission sets are not allowed in member accounts because they are also assigned in the management account.
+    """
+    control_tower_permission_set_names = [
+        "AWSOrganizationsFullAccess",
+        "AWSServiceCatalogEndUserAccess",
+        "AWSServiceCatalogAdminFullAccess",
+        "AWSPowerUserAccess",
+        "AWSAdministratorAccess",
+        "AWSReadOnlyAccess",
+    ]
+    if assignment_template["PermissionSetName"] in control_tower_permission_set_names:
+        error_message = f"The permission set '{assignment_template['PermissionSetName']}' is assigned in a member account. Control Tower permission sets are not allowed in member accounts. Please review your template."
+        log.error(error_message)
+        return [error_message]
+    return []
 
 
-def validate_managed_policies_arn(permission_set_templates):
-    log.info("Analyzing each one of the permission set managed policies.")
-    client = boto3.client("iam")
-    for eachPermissionSet in permission_set_templates:
-        log.info(
-            f"[{eachPermissionSet}] Analyzing AWS managed policies from permission set"
-        )
-
-        try:
-            for eachManagedPolicy in permission_set_templates[eachPermissionSet][
-                "ManagedPolicies"
-            ]:
-                response = client.get_policy(PolicyArn=eachManagedPolicy)
-        except Exception as error:
-            log.error(
-                f"[{eachPermissionSet}] An issue was found in the managed policy. Reason: "
-                + str(error)
-            )
-            exit(1)
-
-    for eachPermissionSet in permission_set_templates:
-        log.info(
-            f"[{eachPermissionSet}] Analyzing permission boundary policies from permission set"
-        )
-
-        try:
-            if (
-                "PermissionBoundary" in permission_set_templates[eachPermissionSet]
-            ) and (permission_set_templates[eachPermissionSet]["PermissionBoundary"]):
-                if (
-                    permission_set_templates[eachPermissionSet]["PermissionBoundary"][
-                        "PolicyType"
-                    ]
-                    == "AWS"
-                ):
-                    response = client.get_policy(
-                        PolicyArn=permission_set_templates[eachPermissionSet][
-                            "PermissionBoundary"
-                        ]["Policy"]
-                    )
-                else:
-                    if (
-                        "arn:aws"
-                        in permission_set_templates[eachPermissionSet][
-                            "PermissionBoundary"
-                        ]["Policy"]
-                    ):
-                        log.error(
-                            f"[{eachPermissionSet}] Looks like you are using an AWS ARN instead of the name of the policy you want as Permission Boundary. Please review your template"
-                        )
-                        exit(1)
-        except Exception as error:
-            log.error(
-                f"[{eachPermissionSet}] An issue was found in the AWS managed permission boundary policy. Reason: "
-                + str(error)
-            )
-            exit(1)
-
-
-def validate_management_permission_set_isolation(
-    assignmentsTemplates, managementIdentifierRegex=r"MGMTACCT"
+def validate_permission_sets(
+    permission_set_templates,
+    current_account_id,
 ):
-    # Check if management permission sets are assigned to non-management accounts and vice-versa
-    management_account_id = boto3.client("organizations").describe_organization()[
-        "Organization"
-    ]["MasterAccountId"]
-    for eachAssignment in assignmentsTemplates["Assignments"]:
-        account_target = eachAssignment["Target"][0]
-        is_mgmt_permisision_set = bool(
-            re.search(managementIdentifierRegex, eachAssignment["PermissionSetName"])
+    errors = []
+    errors += validate_unique_permission_set_name(permission_set_template)
+    for permission_set_template in permission_set_templates:
+        # errors += validate_json_policy_format(permission_set_template)
+        errors += validate_managed_policies_arn(
+            permission_set_template,
+            current_account_id=current_account_id,
         )
-        # A mismatch of permission sets and assignments indicates a problematic, fail-worthy build
-        if (account_target == management_account_id) != is_mgmt_permisision_set:
-            disposition_string = "is not the management account"
-            if account_target == management_account_id:
-                disposition_string = "is the management account"
-            log.error(
-                f"The permission set '{eachAssignment['PermissionSetName']}' is assigned to the account '{account_target}', which {disposition_string}. Please review your template."
-            )
-            exit(1)
+    return errors
+
+
+def validate_assignments(assignment_templates):
+    errors = []
+    errors += validate_assignments_have_unique_identifiers(assignment_templates)
+    for assignment_template in assignment_templates:
+        validate_management_permission_sets_are_isolated(assignment_template)
+        validate_no_control_tower_psets_used_in_member_accounts(
+            assignment_template,
+        )
+    return errors
 
 
 def main(
@@ -252,24 +307,55 @@ def main(
     assignment_templates_path,
     fail_on_types: List[str],
 ):
+    """
+    Returns True if all checks successfully passed validation.
+    Otherwise, returns False.
+    """
     print("########################################")
     print("# Starting AWS SSO Template Validation #")
     print("########################################\n")
 
+    current_account_id = boto3.client("sts").get_caller_identity()["Account"]
+
+    # These functions load the templates from the repository JSON/YAML files
     permission_set_templates = list_permission_set_folder(permission_set_templates_path)
     assignments_templates = list_assignment_folder(assignment_templates_path)
 
-    # List of controls that will be validated
-    validate_unique_permissionset_name(permission_set_templates)
-    validate_unique_assignment_identifiers(assignments_templates)
-    validate_json_policy_format(permission_set_templates)
-    validate_managed_policies_arn(permission_set_templates)
-    validate_management_permission_set_isolation(assignments_templates)
-    if validate_policies(fail_on_types=fail_on_types) == False:
-        log.error("Policies failed validation. Review findings and correct them.")
-        exit(1)
+    # Permission Sets
+    permission_set_errors = validate_permission_sets(
+        permission_set_templates=permission_set_templates,
+        current_account_id=current_account_id,
+    )
+    if permission_set_errors:
+        log.error(
+            "Permission sets failed validation. Review findings and correct them:"
+        )
+        for permission_set_error in permission_set_errors:
+            log.error(permission_set_error)
+        return False
+
+    # Assignments
+    assignment_errors = validate_assignments(
+        assignment_templates=assignments_templates,
+    )
+    if assignment_errors:
+        log.error("Assignments failed validation. Review findings and correct them:")
+        for assignment_error in assignment_errors:
+            log.error(assignment_error)
+        return False
+
+    # Policies
+    policy_errors = validate_policies(
+        fail_on_types=fail_on_types,
+    )
+    if policy_errors:
+        log.error("Policies failed validation. Review findings and correct them:")
+        for policy_error in policy_errors:
+            log.error(policy_error)
+        return False
 
     log.info("Congrats! All templates were evaluated without errors! :)")
+    return True
 
 
 if __name__ == "__main__":
@@ -290,7 +376,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fail-on-types",
         default=["SECURITY_WARNING", "ERROR"],
-        help="The types of policy findings that should cause the script to fail."
+        help="The types of policy findings that should cause the script to fail.",
     )
     args = parser.parse_args()
     permission_set_templates_path = args.psFolder

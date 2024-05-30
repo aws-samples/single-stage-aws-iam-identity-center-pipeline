@@ -11,7 +11,9 @@ This repository does NOT manage SSO permissions for the **MANAGEMENT** account. 
 
 ## Typical Day-to-Day Usage
 
-To update the permission sets and assignments, update the JSON/YAML files in `terraform/source/assignments/templates` and `terraform/source/permission_set/templates` and commit them to your repository. 
+To update the permission sets and assignments, update the JSON/YAML files in `terraform/source/assignments/templates` and `terraform/source/permission_set/templates` and commit them to your repository.
+
+**Warning**: Do not assign Control Tower-owned permission sets to member accounts using this solution. That breaks the principle of separate ownership between management and member accounts, as all CT permission sets are automatically deployed in the management account by Control Tower.
 
 Documentation of their content is detailed in the `terraform/source/JSON_Structure.md` file.
 
