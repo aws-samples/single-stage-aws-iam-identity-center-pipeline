@@ -47,12 +47,10 @@ log.setLevel(logging.INFO)
 
 
 def list_permission_set_folder(permission_set_templates_path):
-    perm_set_dict = {
-        eachFile: json.loads(
-            open(os.path.join(permission_set_templates_path, eachFile)).read()
-        )
-        for eachFile in os.listdir(permission_set_templates_path)
-    }
+    perm_set_dict = {}
+    for each_file in os.listdir(permission_set_templates_path):
+        with open(os.path.join(permission_set_templates_path, each_file)) as f:
+            perm_set_dict[each_file] = json.load(f)
     log.info("Permission Sets successfully loaded from repository files")
     return perm_set_dict
 
@@ -71,6 +69,9 @@ def list_assignment_folder(assignment_templates_path):
 
 
 def validate_unique_permission_set_name(permission_set_templates):
+    """
+    Returns a list of errors, or an empty list if no errors found for this check.
+    """
     list_of_permission_set_name = []
     for permissionSet in permission_set_templates:
         try:
@@ -88,10 +89,10 @@ def validate_unique_permission_set_name(permission_set_templates):
         )
         counter = Counter(list_of_permission_set_name)
         duplicates = [item for item, count in counter.items() if count > 1]
-        raise Exception(f"Duplicate Permission Set Names: {duplicates}")
+        return [f"ERROR - Duplicate Permission Set Names: {duplicates}"]
 
     log.info("No permission sets with the same name were detected.")
-    return True
+    return []
 
 
 def validate_assignments_have_unique_identifiers(assignments_templates):
@@ -172,12 +173,11 @@ def validate_assignments_have_unique_identifiers(assignments_templates):
 #     return errors
 
 
-def validate_managed_policies_arn(permission_set_template, current_account_id):
+def validate_managed_policies_arn(permission_set_object, current_account_id):
     """
     Returns a list of errors in managed policies and permission boundaries.
     """
     errors = []
-    permission_set_object = json.dumps(permission_set_template)
     permission_set_name = permission_set_object["Name"]
 
     client = boto3.client("iam")
@@ -208,16 +208,16 @@ def validate_managed_policies_arn(permission_set_template, current_account_id):
         customer_permission_boundary_object = permission_set_object.get(
             "CustomerPermissionBoundary", {}
         )
-        if re.match(r"^arn:aws", customer_permission_boundary_object["Name"]):
+        if re.match(r"^arn:aws", customer_permission_boundary_object.get("Name", "")):
             error_string = f"[{permission_set_name}] You specified an permission boundary ARN instead of name. Please specify a name."
             log.error(error_string)
             errors.append(error_string)
         elif customer_permission_boundary_object:
             _ = client.get_policy(
-                f"arn:aws:iam::{current_account_id}:policy/{customer_permission_boundary_object['Path']}{customer_permission_boundary_object['Name']}"
+                PolicyArn=f"arn:aws:iam::{current_account_id}:policy/{customer_permission_boundary_object['Path']}{customer_permission_boundary_object['Name']}"
             )
     except Exception as error:
-        error_string = log.error(
+        error_string = (
             f"[{permission_set_name}] An issue was found in the AWS managed permission boundary policy. Reason: "
             + str(error)
         )
@@ -277,12 +277,12 @@ def validate_no_control_tower_psets_used_in_member_accounts(assignment_template)
 
 
 def validate_permission_sets(
-    permission_set_templates,
+    permission_set_templates: dict,
     current_account_id,
 ):
     errors = []
-    errors += validate_unique_permission_set_name(permission_set_template)
-    for permission_set_template in permission_set_templates:
+    errors += validate_unique_permission_set_name(permission_set_templates)
+    for permission_set_template in permission_set_templates.values():
         # errors += validate_json_policy_format(permission_set_template)
         errors += validate_managed_policies_arn(
             permission_set_template,

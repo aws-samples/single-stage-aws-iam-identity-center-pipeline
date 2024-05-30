@@ -21,7 +21,9 @@ def validate_policies(
     """
     bad_files = []
     access_analyzer_client = boto3.client("accessanalyzer")
-    files = glob.glob(permission_sets_path_identifier)
+    files = [
+        f for f in glob.glob(permission_sets_path_identifier) if f.endswith(".json")
+    ]
     for file in files:
         with open(file, "r") as f:
             policy_raw = f.read()
