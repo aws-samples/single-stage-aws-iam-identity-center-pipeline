@@ -172,7 +172,6 @@ def migrate_account_assignment(
     instances_response = sso_client.list_instances()
     instance_arn = instances_response["Instances"][0]["InstanceArn"]
     identity_store_id = instances_response["Instances"][0]["IdentityStoreId"]
-    # Create new assignment
     old_permission_set_name = sso_client.describe_permission_set(
         InstanceArn=instance_arn,
         PermissionSetArn=assignment["PermissionSetArn"],
@@ -190,6 +189,7 @@ def migrate_account_assignment(
     logging.info(
         f"Creating new assignment with Permission Set Name = {new_permission_set_name} and {principal_type} Principal {principal_name}",
     )
+    # Create new assignment
     new_assignment_status = sso_client.create_account_assignment(
         InstanceArn=instance_arn,
         TargetId=target_account,
@@ -210,6 +210,7 @@ def migrate_account_assignment(
         PrincipalType=assignment["PrincipalType"],
         PrincipalId=assignment["PrincipalId"],
     )
+
     return new_assignment_status
 
 
