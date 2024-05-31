@@ -202,6 +202,12 @@ def migrate_account_assignment(
     It will first create the new account assignment and then delete the old account assignment.
     """
     sso_client = boto3.client("sso-admin", config=boto3_config)
+    try:
+        target_account_name = boto3.client(
+            "organizations", config=boto3_config
+        ).describe_account(AccountId=target_account)["Account"]["Name"]
+    except Exception:
+        target_account_name = target_account
     instances_response = sso_client.list_instances()
     instance_arn = instances_response["Instances"][0]["InstanceArn"]
     identity_store_id = instances_response["Instances"][0]["IdentityStoreId"]
@@ -220,7 +226,7 @@ def migrate_account_assignment(
     )
     principal_type = assignment["PrincipalType"]
     logging.info(
-        f"Creating new assignment with Permission Set Name = {new_permission_set_name} and {principal_type} Principal {principal_name}",
+        f"Creating new account assignment for account {target_account_name} ({target_account}) with Permission Set Name = {new_permission_set_name} and {principal_type} Principal {principal_name}",
     )
     # Create new assignment
     new_assignment_status = sso_client.create_account_assignment(
@@ -233,7 +239,7 @@ def migrate_account_assignment(
     )["AccountAssignmentCreationStatus"]
     # Delete old assignment
     logging.info(
-        f"Deleting old assignment with Permission Set Name = {old_permission_set_name} and {principal_type} Principal {principal_name}",
+        f"Deleting old account assignment for account {target_account_name} ({target_account}) with Permission Set Name = {old_permission_set_name} and {principal_type} Principal {principal_name}",
     )
     sso_client.delete_account_assignment(
         InstanceArn=instance_arn,
