@@ -17,7 +17,7 @@ def validate_policies(
     permission_sets_path_identifier: str = "./source/permission_sets/templates/*.json",
 ):
     """
-    Returns true if all files pass validation. Otherwise, false.
+    Returns a list of files that failed policy validation, or an empty list if all files passed.
     """
     bad_files = []
     access_analyzer_client = boto3.client("accessanalyzer")
@@ -49,4 +49,4 @@ def validate_policies(
                 logging.error(f"Failed policy validation for {file}. Details:")
                 logging.error(filtered_findings)
 
-    return len(bad_files) == 0
+    return bad_files

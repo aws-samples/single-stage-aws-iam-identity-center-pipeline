@@ -24,6 +24,7 @@ import argparse
 import os
 import logging
 import re
+import yaml
 from .validate_policies import validate_policies
 from collections import Counter
 from typing import List
@@ -49,6 +50,8 @@ log.setLevel(logging.INFO)
 def list_permission_set_folder(permission_set_templates_path):
     perm_set_dict = {}
     for each_file in os.listdir(permission_set_templates_path):
+        if not each_file.endswith(".json"):
+            continue
         with open(os.path.join(permission_set_templates_path, each_file)) as f:
             perm_set_dict[each_file] = json.load(f)
     log.info("Permission Sets successfully loaded from repository files")
@@ -56,14 +59,13 @@ def list_permission_set_folder(permission_set_templates_path):
 
 
 def list_assignment_folder(assignment_templates_path):
-    assigments_file = glob.glob(assignment_templates_path + "/*.json")
-    assig_dic = {
-        "Assignments": [
-            assignment
-            for eachFile in assigments_file
-            for assignment in json.loads(open(eachFile).read())["Assignments"]
-        ]
-    }
+    assig_dic = {"Assignments": []}
+    assigments_file = glob.glob(assignment_templates_path + "/*.yaml")
+    for each_file in assigments_file:
+        with open(each_file) as f:
+            assignments = yaml.safe_load(f)
+        for each_assignment in assignments["Assignments"]:
+            assig_dic["Assignments"].append(each_assignment)
     log.info("Assignments successfully loaded from repository files")
     return assig_dic
 
@@ -235,24 +237,29 @@ def validate_management_permission_sets_are_isolated(
     managementIdentifierRegex=r"MGMTACCT",
 ):
     """
-    Returns True if the given assignment is using an appropriate permission set ()
-    False if management permission sets are assigned to non-management accounts.
-    Otherwise returns True
+    Returns a list of error messages for any mismatched permission sets that are assigned to the wrong class of account.
+
+    If no mismatches, returns an empty list.
+
+    Examples of mismatches:
+    - Member account using a permission set named DataAccess_MGMTACCT
+    - Management account using a permission set named DataAccess
     """
     invalid_assignments = []
-    account_target = assignment_template["Target"][0]
-    is_mgmt_permisision_set = bool(
-        re.search(managementIdentifierRegex, assignment_template["PermissionSetName"])
-    )
-    # A mismatch of permission sets and assignments indicates a problematic, fail-worthy build
-    if (account_target == management_account_id) != is_mgmt_permisision_set:
-        disposition_string = "is not the management account"
-        if account_target == management_account_id:
-            disposition_string = "is the management account"
-        error_message = f"The permission set '{assignment_template['PermissionSetName']}' is assigned to the account '{account_target}', which {disposition_string}. Please review your template."
-        log.error(error_message)
-        invalid_assignments.append(error_message)
-    return True
+    for assignment in assignment_template:
+        account_target = assignment["Target"][0]
+        is_mgmt_permisision_set = bool(
+            re.search(managementIdentifierRegex, assignment["PermissionSetName"])
+        )
+        # A mismatch of permission sets and assignments is problematic and fail-worthy
+        if (account_target == management_account_id) != is_mgmt_permisision_set:
+            disposition_string = "is not the management account"
+            if account_target == management_account_id:
+                disposition_string = "is the management account"
+            error_message = f"The permission set '{assignment['PermissionSetName']}' is assigned to the account '{account_target}', which {disposition_string}. Please review your template."
+            log.error(error_message)
+            invalid_assignments.append(error_message)
+    return invalid_assignments
 
 
 def validate_no_control_tower_psets_used_in_member_accounts(assignment_template):
@@ -261,6 +268,7 @@ def validate_no_control_tower_psets_used_in_member_accounts(assignment_template)
 
     Control Tower permission sets are not allowed in member accounts because they are also assigned in the management account.
     """
+    errors = []
     control_tower_permission_set_names = [
         "AWSOrganizationsFullAccess",
         "AWSServiceCatalogEndUserAccess",
@@ -269,11 +277,12 @@ def validate_no_control_tower_psets_used_in_member_accounts(assignment_template)
         "AWSAdministratorAccess",
         "AWSReadOnlyAccess",
     ]
-    if assignment_template["PermissionSetName"] in control_tower_permission_set_names:
-        error_message = f"The permission set '{assignment_template['PermissionSetName']}' is assigned in a member account. Control Tower permission sets are not allowed in member accounts. Please review your template."
-        log.error(error_message)
-        return [error_message]
-    return []
+    for assignment in assignment_template:
+        if assignment["PermissionSetName"] in control_tower_permission_set_names:
+            error_message = f"The permission set '{assignment['PermissionSetName']}' is assigned in a member account. Control Tower permission sets are not allowed in member accounts. Please review your template."
+            log.error(error_message)
+            errors.append(error_message)
+    return errors
 
 
 def validate_permission_sets(
@@ -291,11 +300,16 @@ def validate_permission_sets(
     return errors
 
 
-def validate_assignments(assignment_templates):
+def validate_assignments(
+    assignment_templates: dict,
+    management_account_id: str,
+):
     errors = []
     errors += validate_assignments_have_unique_identifiers(assignment_templates)
-    for assignment_template in assignment_templates:
-        validate_management_permission_sets_are_isolated(assignment_template)
+    for assignment_template in assignment_templates.values():
+        validate_management_permission_sets_are_isolated(
+            assignment_template, management_account_id=management_account_id
+        )
         validate_no_control_tower_psets_used_in_member_accounts(
             assignment_template,
         )
@@ -316,6 +330,9 @@ def main(
     print("########################################\n")
 
     current_account_id = boto3.client("sts").get_caller_identity()["Account"]
+    management_account_id = boto3.client("organizations").describe_organization()[
+        "Organization"
+    ]["MasterAccountId"]
 
     # These functions load the templates from the repository JSON/YAML files
     permission_set_templates = list_permission_set_folder(permission_set_templates_path)
@@ -337,6 +354,7 @@ def main(
     # Assignments
     assignment_errors = validate_assignments(
         assignment_templates=assignments_templates,
+        management_account_id=management_account_id,
     )
     if assignment_errors:
         log.error("Assignments failed validation. Review findings and correct them:")
