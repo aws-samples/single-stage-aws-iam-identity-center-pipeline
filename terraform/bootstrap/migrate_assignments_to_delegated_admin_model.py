@@ -2,6 +2,7 @@ import argparse
 import boto3
 import logging
 import argparse
+import re
 from botocore.config import Config
 
 """
@@ -108,7 +109,15 @@ def duplicate_permisson_set(old_permisson_set_arn, new_suffix, boto3_config):
         InstanceArn=instance_arn,
         PermissionSetArn=old_permisson_set_arn,
     )["PermissionSet"]
-    new_permisson_set_name = old_permisson_set["Name"] + new_suffix
+    if len(old_permisson_set["Name"] + new_suffix) <= 32:
+        new_permisson_set_name = old_permisson_set["Name"] + new_suffix
+    else:
+        new_permisson_set_name = old_permisson_set["Name"].replace("Access", new_suffix)
+    # Check final length
+    if (len(new_permisson_set_name)) > 32:
+        raise Exception(
+            f"New permission set name {new_permisson_set_name} is too long. Please shorten it to 32 or fewer characters."
+        )
     # Create new permission set
     logging.info(f"Creating new permission set {new_permisson_set_name}")
     # Splat arguments to avoid passing in None
@@ -317,6 +326,11 @@ def main(read_only, region):
             InstanceArn=instance_arn,
             PermissionSetArn=permisson_set_arn,
         )["PermissionSet"]["Name"]
+        if re.search(r"_MGMTACCT$", ps_name):
+            print(
+                f"Skipping migration of permission set {ps_name} (ARN: {permisson_set_arn}) because it already has a management-only version"
+            )
+            continue
         if read_only:
             print(
                 f"Skipping migration of permission set {ps_name} (ARN: {permisson_set_arn}) because read_only is set to True"
