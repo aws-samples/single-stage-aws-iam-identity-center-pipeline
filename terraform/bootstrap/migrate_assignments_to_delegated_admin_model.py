@@ -341,8 +341,11 @@ def main(read_only, region):
     print(
         f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
     )
+    list_of_permission_sets_to_unprovision = "\n".join(
+        migrated_permission_set_names
+    )
     print(
-        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {"\n".join(migrated_permission_set_names)}"
+        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {list_of_permission_sets_to_unprovision}"
     )
 
     # Review member accounts that are using CT permission sets and migrate them to member-only permission sets
