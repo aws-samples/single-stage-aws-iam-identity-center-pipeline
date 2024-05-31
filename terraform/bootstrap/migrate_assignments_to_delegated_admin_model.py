@@ -4,8 +4,32 @@ import logging
 import argparse
 from botocore.config import Config
 
-# Documentation for this script is in the main() function
-# This script is intended to be run from the management account.
+"""
+This script is intended to be run from the management account.
+
+This script will create new permission sets for each permission set currently used by the management account.
+
+It will replace the old permission set with the new permission set.
+
+For example, if I had an old permission set called "Admin", this script would...
+1. create a copy permission set with the same contents, called "Admin_MGMTACCT"
+2. migrate all management account assignments for that PS to the new permission set.
+3. NOT change account assignments for the member accounts
+
+This script will handle CT-owned permission sets separately from non-CT owned permission sets.
+
+This script will also look for any member accounts that are using CT-owned permission sets and migrate them to new member-only permission sets.
+For example, if I am assigning the `Company_Data_Scientist` group the `AWSAdministratorAccess` permission set, this script will...
+1. Duplicate the `AWSAdministratorAccess` permission set to `AWSAdministratorAccess_MEMBER`
+2. It will then migrate the assignment to the new permission set.
+3. After running this migration, don't use Control Tower permission sets for customer-managed assignments. Use the `_MEMBER` version instead
+
+There are a few implications to using this script:
+1. Permission set names, and therefore SSO role names, will change. This may have implications for SCPs that use SSO roles in condition keys; be ready to update SCPs based on these changes.
+2. These changes are occurring outside of IAC, meaning that you will need to update IAC code to match these changes; you can use the import scripts in the `bootstrap` folder to accelerate the IAC changes.
+3. This script will not update any permission sets or assignments that are owned by Control Tower. It *will* update customer-managed assignments that use CT-owned permission sets.
+4. This script may break any existing automation that creates SSO account assignments outside of IaC (some AFT implementations, for example, create SSO roles for new accounts). 
+"""
 
 # Set log level to INFO
 logging.basicConfig(level=logging.INFO)
@@ -270,27 +294,6 @@ def get_permission_set_name_to_arn_map(boto3_config):
 
 
 def main(read_only, region):
-    """
-    This script is intended to be run from the management account.
-
-    This script will create new permission sets for each permission set currently used by the management account.
-
-    It will replace the old permission set with the new permission set.
-
-    For example, if I had an old permission set called "Admin", this script would create a copy permission set with the same contents, called "Admin_MGMTACCT" and migrate all assignments to the new permission set.
-
-    This script will handle CT-owned permission sets separately from non-CT owned permission sets.
-
-    This script will also look for any member accounts that are using CT-owned permission sets and migrate them to new member-only permission sets.
-    For example, if I am assigning the `Company_Data_Scientist` group the `AWSAdministratorAccess` permission set, this script will first duplicate the permission set to `AWSAdministratorAccess_MEMBER`
-    It will then migrate the assignment to the new permission set.
-
-    There are a few implications to using this script:
-    1. Permission set names, and therefore SSO role names, will change. This may have implications for SCPs that use SSO roles in condition keys; be ready to update SCPs based on these changes.
-    2. These changes are occurring outside of IAC, meaning that you will need to update IAC code to match these changes; you can use the import scripts in the `bootstrap` folder to accelerate the IAC changes.
-    3. This script will not update any permission sets or assignments that are owned by Control Tower. It *will* update customer-managed assignments that use CT-owned permission sets.
-    4. This script may break any existing automation that creates SSO account assignments outside of IaC (some AFT implementations, for example, create SSO roles for new accounts). 
-    """
     boto3_config = Config(region_name=region)
     # Get the management account ID
     management_account_id = boto3.client(
