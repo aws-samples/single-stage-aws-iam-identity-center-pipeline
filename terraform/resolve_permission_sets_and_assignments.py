@@ -71,6 +71,7 @@ import re
 import yaml
 import argparse
 import validation.iam_identitycenter_validation as iam_identitycenter_validation
+import sys
 
 # Logging configuration
 logging.basicConfig(
@@ -779,11 +780,14 @@ def main():
     print("#######################################")
     print("# Starting AWS SSO Validation Section #")
     print("#######################################\n")
-    iam_identitycenter_validation.main(
+    is_valid = iam_identitycenter_validation.main(
         permission_set_templates_path=permission_sets_template_relative_path,
         assignment_templates_path=templates_relative_path,
         fail_on_types=fail_on_types,
     )
+    if not is_valid:
+        print("Validation failed. Exiting. Fix errors and re-run!")
+        sys.exit(1)
 
     print("#######################################")
     print("# Starting AWS SSO Resolution Section #")
