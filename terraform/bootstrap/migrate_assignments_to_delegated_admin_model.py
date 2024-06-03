@@ -327,6 +327,7 @@ def main(read_only, region):
 
     # Create management-only permission sets and migrate management assignments to them
     migrated_permission_set_names = []
+    too_long_permission_set_names = []
     for permisson_set_arn in non_ct_permisson_set_arns:
         ps_name = sso_client.describe_permission_set(
             InstanceArn=instance_arn,
@@ -336,6 +337,13 @@ def main(read_only, region):
             print(
                 f"Skipping migration of permission set {ps_name} (ARN: {permisson_set_arn}) because it already has a management-only version"
             )
+            continue
+        # Skip and flag permission sets that would exceed the maximum name length
+        if len(ps_name) > (32 - len("_MGMTACCT")):
+            print(
+                f"[ACTION REQUIRED] Skipping migration of permission set {ps_name} (ARN: {permisson_set_arn}) because it would exceed the maximum name length. Create a custom name for this new management permission set."
+            )
+            too_long_permission_set_names.append(ps_name)
             continue
         if read_only:
             print(
@@ -358,13 +366,23 @@ def main(read_only, region):
                 boto3_config=boto3_config,
             )
         migrated_permission_set_names.append(ps_name)
-    print(
-        f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
-    )
-    list_of_permission_sets_to_unprovision = "\n".join(migrated_permission_set_names)
-    print(
-        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {list_of_permission_sets_to_unprovision}"
-    )
+    if migrated_permission_set_names:
+        print(
+            f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
+        )
+        list_of_permission_sets_to_unprovision = "\n".join(
+            migrated_permission_set_names
+        )
+        print(
+            f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {list_of_permission_sets_to_unprovision}"
+        )
+    if too_long_permission_set_names:
+        list_of_permission_sets_to_manually_rename = "\n".join(
+            too_long_permission_set_names
+        )
+        print(
+            f"[ACTION REQUIRED] Permission Sets to manually rename, due to exceeding the length cap if additional characters were added on:\n {list_of_permission_sets_to_manually_rename}"
+        )
 
     # Review member accounts that are using CT permission sets and migrate them to member-only permission sets
     log_archive_account, audit_account = get_log_archive_audit_accounts(boto3_config)
