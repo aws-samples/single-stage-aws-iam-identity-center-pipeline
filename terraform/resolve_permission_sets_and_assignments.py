@@ -578,7 +578,7 @@ def resolve_targets(
         # Account names, OUs, and ROOT
         else:
             new_accounts, updated_identifier_cache = list_accounts_in_identifier(
-                ou_identifier=string_target,
+                identifier=string_target,
                 all_accounts_map=all_accounts_map,
                 all_ous_map=all_ous_map,
                 boto_config=boto_config,
@@ -621,14 +621,13 @@ resource "aws_ssoadmin_account_assignment" "assignment_{account}{escaped_princip
 """
 
 
-def get_all_ous_map(org_client, parent_id, parent_name=""):
+def get_all_ous_map(org_client, parent_id, parent_name="", full_result={}):
     """
     Returns a map of all OUs in the Organization, with the OU name as the key and a list of
     objects containing OU IDs and OU full path names for each matching OU name.
 
     Recursively calls itself.
     """
-    full_result = {}
 
     paginator = org_client.get_paginator("list_children")
     iterator = paginator.paginate(
@@ -650,12 +649,11 @@ def get_all_ous_map(org_client, parent_id, parent_name=""):
                     "FullPath": f"{parent_name}/{ou_name}",
                 }
             )
-            full_result.extend(
-                get_all_ous_map(
-                    org_client=org_client,
-                    parent_id=ou["Id"],
-                    parent_name=ou_name,
-                )
+            full_result = get_all_ous_map(
+                org_client=org_client,
+                parent_id=ou["Id"],
+                parent_name=ou_name,
+                full_result=full_result,
             )
 
     return full_result
