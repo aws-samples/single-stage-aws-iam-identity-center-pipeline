@@ -426,6 +426,12 @@ def main(read_only, region):
             if account_with_ct_permission_set_provisioned == management_account_id:
                 is_management_account = True
 
+            if is_management_account:
+                print(
+                    "Skipping management account, as its permission sets do not need to be migrated to MEMBER-only versions"
+                )
+                continue
+
             # List assignments for the account/permission set
             account_assignments = sso_client.list_account_assignments(
                 AccountId=account_with_ct_permission_set_provisioned,

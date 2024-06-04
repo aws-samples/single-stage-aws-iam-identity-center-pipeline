@@ -390,8 +390,9 @@ def get_all_accounts_in_ou(
 
 
 def list_accounts_in_identifier(
-    ou_identifier: str,
+    identifier: str,
     all_accounts_map: dict,
+    all_ous_map: dict,
     boto_config: Config,
     identifier_cache: dict,
 ):
@@ -403,63 +404,54 @@ def list_accounts_in_identifier(
 
     If the identifier already exists in the cache, just use the locally-stored value
     """
-    if ou_identifier in identifier_cache:
-        return identifier_cache[ou_identifier], identifier_cache
+    if identifier in identifier_cache:
+        return identifier_cache[identifier], identifier_cache
     results = []
     client = boto3.client(
         "organizations",
         config=boto_config,
     )
-    log.info(f"Resolving {ou_identifier} to a list of accounts")
+    log.info(f"Resolving {identifier} to a list of accounts")
     ou_id = None
     # Case for OU ID
-    if re.match(r"ou-", ou_identifier):
-        ou_id = ou_identifier
+    if re.match(r"ou-", identifier):
+        ou_id = identifier
     # Case for Root
-    elif "r-" in ou_identifier or "ROOT" == ou_identifier.upper():
-        response = client.list_accounts()
-        results = response["Accounts"]
-        while "NextToken" in response:
-            response = client.list_accounts(NextToken=response["NextToken"])
-            results.extend(response["Accounts"])
-    # Case for OU Name (not ID)
-    else:
-        # Get all OU names and walk through them until we find the OU name in question
-        root_id = client.list_roots()["Roots"][0]["Id"]
-        log.info(f"Attempting to resolve OU Name {ou_identifier} to an OU ID")
-        all_ous_response = resolve_ou_names(
-            ou_id=root_id,
-            client=client,
-        )
-        ou_ids_from_name = []
-        for each_ou in all_ous_response:
-            if each_ou["Name"] == ou_identifier:
-                ou_ids_from_name.append(each_ou["Id"])
-                log.info(
-                    f"[OU: {ou_identifier}] Organization Unit ID {each_ou['Id']} found for OU name"
-                )
-        # Error checking cases
-        if len(ou_ids_from_name) == 0 and ou_identifier not in all_accounts_map:
-            raise Exception(
-                f"Could not find a match for identifier '{ou_identifier}' as either an OU or account name. Please check your name and try again."
-            )
-        elif len(ou_ids_from_name) == 0 and ou_identifier in all_accounts_map:
+    elif "r-" in identifier or "ROOT" == identifier.upper():
+        for each_account in all_accounts_map.values():
             results.append(
                 {
-                    "Id": all_accounts_map[ou_identifier],
+                    "Id": each_account,
                     "Status": "ACTIVE",
                 }
             )
-        elif len(ou_ids_from_name) > 0 and ou_identifier in all_accounts_map:
+    # Case for free text identifiers
+    else:
+        if identifier not in all_ous_map and identifier not in all_accounts_map:
             raise Exception(
-                f"The specified '{ou_identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
+                f"Could not find a match for identifier '{identifier}' as either an OU or account name. Please check your name and try again."
             )
-        elif len(ou_ids_from_name) > 1:
+        if identifier in all_ous_map and identifier in all_accounts_map:
             raise Exception(
-                f"Found multiple matches for identifier '{ou_identifier}' as either an OU or account name. Either rename the OU(s) or specify using their ID."
+                f"The specified identifier '{identifier}' is currently being used as both an account name and OU name. Either rename the Account/OU(s) or specify using their ID."
+            )
+        if identifier in all_ous_map:
+            if len(all_ous_map[identifier]) > 1:
+                raise Exception(
+                    f"Found multiple matches for identifier '{identifier}' as an OU name. Either rename the OU(s) or specify using their ID."
+                )
+            ou_id = all_ous_map[identifier][0]["Id"]
+        elif identifier in all_accounts_map:
+            results.append(
+                {
+                    "Id": all_accounts_map[identifier],
+                    "Status": "ACTIVE",
+                }
             )
         else:
-            ou_id = ou_ids_from_name[0]
+            raise Exception(
+                f"Could not find a match for identifier '{identifier}' as either an OU or account name. Please check your name and try again."
+            )
 
     # Get all accounts in the OU
     if ou_id is not None:
@@ -475,7 +467,7 @@ def list_accounts_in_identifier(
     for eachResult in results:
         if eachResult["Status"] == "ACTIVE":
             account_list.append(eachResult["Id"])
-    identifier_cache[ou_identifier] = account_list
+    identifier_cache[identifier] = account_list
     return account_list, identifier_cache
 
 
@@ -564,6 +556,7 @@ def create_permission_set_arn_dict(
 def resolve_targets(
     each_current_assignments: dict,
     all_accounts_map: dict,
+    all_ous_map: dict,
     boto_config: Config,
     identifier_cache: dict,
 ) -> list:
@@ -587,6 +580,7 @@ def resolve_targets(
             new_accounts, updated_identifier_cache = list_accounts_in_identifier(
                 ou_identifier=string_target,
                 all_accounts_map=all_accounts_map,
+                all_ous_map=all_ous_map,
                 boto_config=boto_config,
                 identifier_cache=identifier_cache,
             )
@@ -627,6 +621,46 @@ resource "aws_ssoadmin_account_assignment" "assignment_{account}{escaped_princip
 """
 
 
+def get_all_ous_map(org_client, parent_id, parent_name=""):
+    """
+    Returns a map of all OUs in the Organization, with the OU name as the key and a list of
+    objects containing OU IDs and OU full path names for each matching OU name.
+
+    Recursively calls itself.
+    """
+    full_result = {}
+
+    paginator = org_client.get_paginator("list_children")
+    iterator = paginator.paginate(
+        ParentId=parent_id,
+        ChildType="ORGANIZATIONAL_UNIT",
+    )
+    for page in iterator:
+        for ou in page["Children"]:
+            # 1. Add entry
+            # 2. Fetch children recursively
+            ou_name = org_client.describe_organizational_unit(
+                OrganizationalUnitId=ou["Id"]
+            )["OrganizationalUnit"]["Name"]
+            if ou_name not in full_result:
+                full_result[ou_name] = []
+            full_result[ou_name].append(
+                {
+                    "Id": ou["Id"],
+                    "FullPath": f"{parent_name}/{ou_name}",
+                }
+            )
+            full_result.extend(
+                get_all_ous_map(
+                    org_client=org_client,
+                    parent_id=ou["Id"],
+                    parent_name=ou_name,
+                )
+            )
+
+    return full_result
+
+
 def create_assignments_manifest_from_repo_assignments(
     repository_assignments: dict,
     identity_store: str,
@@ -663,6 +697,13 @@ def create_assignments_manifest_from_repo_assignments(
             continue
         all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
 
+    # Get OUs map
+    root_id = org_client.list_roots()["Roots"][0]["Id"]
+    all_ous_map = get_all_ous_map(
+        org_client=org_client,
+        parent_id=root_id,
+    )
+
     resolved_assignments = {}
     resolved_assignments["Assignments"] = []
 
@@ -672,6 +713,7 @@ def create_assignments_manifest_from_repo_assignments(
         accounts, identifier_cache = resolve_targets(
             each_current_assignments=assignment,
             all_accounts_map=all_accounts_map,
+            all_ous_map=all_ous_map,
             boto_config=boto_config,
             identifier_cache=identifier_cache,
         )
