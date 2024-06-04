@@ -647,20 +647,21 @@ def create_assignments_manifest_from_repo_assignments(
     management_account = org_client.describe_organization()["Organization"][
         "MasterAccountId"
     ]
+
+    # Get accounts map
     all_accounts_map = {}
+    all_accounts_response_list = []
     response = org_client.list_accounts()
-    if "NextToken" not in response:
-        for eachAccount in response["Accounts"]:
-            if eachAccount["Status"] != "ACTIVE":
-                continue
-            all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
-    else:
-        while "NextToken" in response:
-            for eachAccount in response["Accounts"]:
-                if eachAccount["Status"] != "ACTIVE":
-                    continue
-                all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
-            response = org_client.list_accounts(NextToken=response["NextToken"])
+    all_accounts_response_list.extend(response.get("Accounts", []))
+    # Paginate as appropriate
+    while "NextToken" in response:
+        response = org_client.list_accounts(NextToken=response["NextToken"])
+        all_accounts_response_list.extend(response.get("Accounts", []))
+    # Convert list of accounts to map of Names --> IDs
+    for eachAccount in response["Accounts"]:
+        if eachAccount["Status"] != "ACTIVE":
+            continue
+        all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
 
     resolved_assignments = {}
     resolved_assignments["Assignments"] = []
