@@ -658,7 +658,7 @@ def create_assignments_manifest_from_repo_assignments(
         response = org_client.list_accounts(NextToken=response["NextToken"])
         all_accounts_response_list.extend(response.get("Accounts", []))
     # Convert list of accounts to map of Names --> IDs
-    for eachAccount in response["Accounts"]:
+    for eachAccount in all_accounts_response_list:
         if eachAccount["Status"] != "ACTIVE":
             continue
         all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
