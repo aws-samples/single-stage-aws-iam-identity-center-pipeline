@@ -391,6 +391,7 @@ def get_all_accounts_in_ou(
 
 def list_accounts_in_identifier(
     identifier: str,
+    # This account map is expected to include ONLY active accounts
     all_accounts_map: dict,
     all_ous_map: dict,
     boto_config: Config,
