@@ -1,11 +1,12 @@
 import argparse
 import boto3
-import json
 import logging
 from botocore.config import Config
 import os
 import re
 import yaml
+
+from group_assignments_by_permission_set import group_assignments_by_permission_set
 
 logging.basicConfig(level=logging.INFO)
 
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log-archive-account-name",
         type=str,
-        default="Log Archive",
+        default="Log archive",
         help="The name of the Log Archive account in your organization",
     )
     parser.add_argument(
@@ -357,3 +358,6 @@ import {{
         )
         with open(template_path, "w") as file:
             file.write(yaml.dump(output[usergroup], indent=4))
+
+    # Use the grouping function to clean up the assignments
+    group_assignments_by_permission_set(TEMPLATE_OUTPUT_DIRECTORY)
