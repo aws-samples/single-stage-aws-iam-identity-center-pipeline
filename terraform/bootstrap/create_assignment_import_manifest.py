@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log-archive-account-name",
         type=str,
-        default="Log archive",
+        default="Log Archive",
         help="The name of the Log Archive account in your organization",
     )
     parser.add_argument(
