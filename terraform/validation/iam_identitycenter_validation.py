@@ -53,6 +53,8 @@ def list_permission_set_folder(permission_set_templates_path):
         if not each_file.endswith(".json"):
             continue
         with open(os.path.join(permission_set_templates_path, each_file)) as f:
+            log.info(f"Loading permission set {each_file}")
+            # Load the JSON file into a dictionary
             perm_set_dict[each_file] = json.load(f)
     log.info("Permission Sets successfully loaded from repository files")
     return perm_set_dict
