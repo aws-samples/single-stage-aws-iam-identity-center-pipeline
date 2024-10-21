@@ -55,13 +55,13 @@ if __name__ == "__main__":
         "--log-archive-account-name",
         type=str,
         default="Log Archive",
-        help="The name of the Log Archive account in your organization",
+        help="The name of the Log Archive account in your AWS Organization. This is its Organization name, NOT the account email.",
     )
     parser.add_argument(
         "--audit-account-name",
         type=str,
         default="Audit",
-        help="The name of the Audit account in your organization",
+        help="The name of the Audit account in your AWS Organization. This is its Organization name, NOT the account email.",
     )
     args = parser.parse_args()
     region = args.region
