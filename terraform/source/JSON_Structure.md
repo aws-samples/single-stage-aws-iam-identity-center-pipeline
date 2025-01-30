@@ -109,7 +109,7 @@ Assignments:
 - **Target**
   - Type: List (string)
   - Can be changed after deployed: Yes
-  - Description: Target where the principal will have access with a specific permission set. Supports AccountIds, Organizational Unit (OU) IDs, Organizational Unit (OU) Names and Root Id or just "Root" (for associating to all accounts). Does not support account names; any names will be interpreted as OU names. Sub-OUs will not be included; only accounts directly attached to the OU will be included.
+  - Description: Target where the principal will have access with a specific permission set. Supports AccountIds, Organizational Unit (OU) IDs, Organizational Unit (OU) Names, Account Names, Root Id, or just "ROOT" (for associating to all accounts). Non-ID names must match exactly 1 name in the set of all OUs and Accounts; an error will be thrown if the number of name matches is not 1 (use ID values and comments if there same-name entities). Sub-OUs will not be included; only accounts directly attached to the OU will be included.
 - **PrincipalType**
   - Type: String
   - Can be changed after deployed: No
