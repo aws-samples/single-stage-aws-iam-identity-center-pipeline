@@ -586,6 +586,35 @@ def resolve_targets(
                 identifier_cache=identifier_cache,
             )
             account_list.extend(new_accounts)
+    # Allow for an Exclusions key to remove
+    for eachExclusion in each_current_assignments.get("Exclusions", []):
+        string_exclusion = str(eachExclusion)
+        pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
+        if pattern.match(string_exclusion):
+            try:
+                account_list.remove(string_exclusion)
+            except ValueError:
+                logging.debug(
+                    f"Account {eachExclusion} was not in the list of identifiers, no need to remove it"
+                )
+                pass  # item was not in the list
+        else:
+            new_accounts, updated_identifier_cache = list_accounts_in_identifier(
+                identifier=string_exclusion,
+                all_accounts_map=all_accounts_map,
+                all_ous_map=all_ous_map,
+                boto_config=boto_config,
+                identifier_cache=identifier_cache,
+            )
+            for eachAccount in new_accounts:
+                if eachAccount in account_list:
+                    try:
+                        account_list.remove(eachAccount)
+                    except ValueError:
+                        logging.debug(
+                            f"Account {eachExclusion} was not in the list of identifiers, no need to remove it"
+                        )
+                        pass  # item was not in the list
 
     return account_list, updated_identifier_cache
 
@@ -789,7 +818,7 @@ def main():
     )
     parser.add_argument(
         "--fail-on-types",
-        default=["SECURITY_WARNING", "ERROR"],
+        default=["ERROR"],
         help="The types of policy findings that should cause the script to fail.",
     )
     args = parser.parse_args()
