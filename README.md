@@ -9,6 +9,10 @@ As a rule of thumb, SSO permissions have three components: a **user group** (_wh
 
 This repository does NOT manage SSO permissions for the **MANAGEMENT** account. That is the only account that this pipeline is not able to manage, due to delegated administrator requirements. The management account has a separate set of Permission Sets and Assignments that should only be used in the management account. Alternatively, you could choose to not provision any SSO roles to the management account at all: this would align with AWS's recommendation to limit use of the management account for routine tasks.
 
+## Architecture
+
+<img width="1763" height="1143" alt="Untitled" src="https://github.com/user-attachments/assets/8763acd4-c7a1-440b-aa6c-60a4a41207b4" />
+
 ## Typical Day-to-Day Usage
 
 To update the permission sets and assignments, update the JSON/YAML files in `terraform/source/assignments/templates` and `terraform/source/permission_set/templates` and commit them to your repository.
