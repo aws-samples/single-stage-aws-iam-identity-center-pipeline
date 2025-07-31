@@ -360,8 +360,11 @@ def main(
     )
     if assignment_errors:
         log.error("Assignments failed validation. Review findings and correct them:")
-        for assignment_error in assignment_errors:
-            log.error(assignment_error)
+        if isinstance(assignment_errors, list):
+            for assignment_error in assignment_errors:
+                log.error(assignment_error)
+        else:
+            log.error(assignment_errors)
         return False
 
     # Policies
@@ -370,8 +373,12 @@ def main(
     )
     if policy_errors:
         log.error("Policies failed validation. Review findings and correct them:")
-        for policy_error in policy_errors:
-            log.error(policy_error)
+        # check if it's a list or string so we don't print out individual characters in a loop
+        if isinstance(policy_errors, list):
+            for policy_error in policy_errors:
+                log.error(policy_error)
+        else:
+            log.error(policy_errors)
         return False
 
     log.info("Congrats! All templates were evaluated without errors! :)")
