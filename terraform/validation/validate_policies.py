@@ -45,7 +45,7 @@ def validate_policies(
                     ]  # Remove overly verbose location information
                     filtered_findings.append(finding)
             if filtered_findings:
-                bad_files += file
+                bad_files.append(file)
                 logging.error(f"Failed policy validation for {file}. Details:")
                 logging.error(filtered_findings)
 
