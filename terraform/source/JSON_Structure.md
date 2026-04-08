@@ -102,6 +102,9 @@ Assignments:
   PermissionSetName: SecurityAudit
   Target:
   - ROOT # Special keyword to target all accounts in the organization
+  Exclusions:
+  - Audit
+  - Log archive
 ```
 
 > The output of the `create_assignment_import_manifest.py` file will group assignment statements into one file per Principal and use the principal name as the file's base name. While you do not need to follow this convention, it greatly simplifies working with the pipeline, as you will be able to see all of a user/group's permissions in one file.
@@ -109,7 +112,11 @@ Assignments:
 - **Target**
   - Type: List (string)
   - Can be changed after deployed: Yes
-  - Description: Target where the principal will have access with a specific permission set. Supports AccountIds, Organizational Unit (OU) IDs, Organizational Unit (OU) Names, Account Names, Root Id, or just "ROOT" (for associating to all accounts). Non-ID names must match exactly 1 name in the set of all OUs and Accounts; an error will be thrown if the number of name matches is not 1 (use ID values and comments if there same-name entities). Sub-OUs will not be included; only accounts directly attached to the OU will be included.
+  - Description: Target where the principal will have access with a specific permission set. Supports AccountIds, Organizational Unit (OU) IDs, Organizational Unit (OU) Names and Root Id or just "Root" (for associating to all accounts). Does not support account names; any names will be interpreted as OU names. Sub-OUs will not be included; only accounts directly attached to the OU will be included.
+- **Exclusions**
+  - Type: List(string)
+  - Can be changed after deployed: Yes
+  - Description: Targets that are explicitly denied from being assigned. Useful if you want to grant access to a large OU except for specific accounts or sub-OUs. Supports the same input types as Target.
 - **PrincipalType**
   - Type: String
   - Can be changed after deployed: No
