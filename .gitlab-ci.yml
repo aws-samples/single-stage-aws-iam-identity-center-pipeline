@@ -28,7 +28,7 @@ variables:
   #   description: "WARNING this will destroy ALL resources defined in this Terraform configuration! Enter 'destroy' to destroy"
 
 include:
-  - local: "/.gitlab/Terraform.gitlab-ci.yml"
+  - local: "/.gitlab/Terraform.gitlab-ci.yml" # allows for extending pipeline using this external yml file's defined stages and jobs
 stages:
   - init
   - plan
@@ -45,8 +45,19 @@ before_script:
     echo -e "* PRIMARY_BRANCH\t$PRIMARY_BRANCH"
     echo -e "* DESTROY\t\t$DESTROY"
     terraform -version
+    apk add --no-cache python3 py3-pip # install command for alpine linux (TF docker image flavor)
+    # the below is only for environments that support OIDC.
+    mkdir -p ~/.aws
+    echo "${GITLAB_OIDC_TOKEN}" > /tmp/web_identity_token
+    echo -e "[default]\nrole_arn=${AWS_ROLE_ARN}\nweb_identity_token_file=/tmp/web_identity_token" > ~/.aws/config
 
 init:
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    AWS_ROLE_ARN: "arn:aws:iam::<YOUR_IDC_PIPELINE_ROLE>:role/gitlab-idc-pipeline-role-readonly"
+    AWS_DEFAULT_REGION: "us-east-1" # YOUR_REGION_HERE
   extends: .init
   stage: init
   rules:
@@ -56,13 +67,19 @@ init:
       when: always
 
 plan:
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    AWS_ROLE_ARN: "arn:aws:iam::<YOUR_IDC_PIPELINE_ROLE>:role/gitlab-idc-pipeline-role-readonly"
+    AWS_DEFAULT_REGION: "us-east-1" # YOUR_REGION_HERE
   stage: plan
   extends: .plan
   before_script:
   - |
     echo "* Installing boto3..." # NOTE this can be baked into the container
     cd ${TF_ROOT}
-    pip install boto3
+    apk add py3-boto3 py3-yaml # install command for alpine linux (TF docker image flavor)
     echo "* Install complete."
     echo "* Generating terraform config files..."
     /usr/bin/python3 resolve_permission_sets_and_assignments.py
@@ -74,15 +91,20 @@ plan:
       when: always
 
 # Not production ready. The below test stage is a test placeholder. The current test set is not sufficient for proper code coverage or security coverage; it does not contain any security tests or security guarantees.
-
 test:
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    AWS_ROLE_ARN: "arn:aws:iam::<YOUR_IDC_PIPELINE_ROLE>:role/gitlab-idc-pipeline-role-readonly"
+    AWS_DEFAULT_REGION: "us-east-1" # YOUR_REGION_HERE
   stage: test
   script:
     - |
       echo "* Initializing pre-commit test..."
       cd ${TF_ROOT}
       cp $CI_PROJECT_DIR/.gitlab/.pre-commit-config.yaml ${TF_ROOT}
-      pip install pre-commit --ignore-installed
+      apk add py3-pre-commit # --ignore-installed
       echo "* Initialization complete."
     - |
       echo "* Running pre-commit tests..."
@@ -97,6 +119,12 @@ test:
       when: always
 
 apply:
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  variables:
+    AWS_ROLE_ARN: "arn:aws:iam::<YOUR_IDC_PIPELINE_ROLE>:role/gitlab-idc-pipeline-role" # uses the read-write role to be able to change state
+    AWS_DEFAULT_REGION: "us-east-1" # YOUR_REGION_HERE
   stage: apply
   extends: .apply
   rules:

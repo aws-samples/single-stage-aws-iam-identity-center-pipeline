@@ -44,8 +44,8 @@ Assignments:
   PrincipalType: GROUP
   PermissionSetName: ViewOnlyAccess
   Target:
-  - 11111111111 # ID of an account -- remember to quote it so that it's interpreted as a string
-  - ou-12345678 # ID of an OU
+  - '111111111111' # ID of an account -- remember to quote it so that it's interpreted as a string
+  - ou-1234-12345678 # ID of an OU
 - PrincipalId: EXAMPLEAWSSecurityAuditors
   PrincipalType: GROUP
   PermissionSetName: ReadOnlyAccess
@@ -65,7 +65,7 @@ EXPECTED_ASSIGNMENT = {
             "PrincipalId": "EXAMPLEAWSSecurityAuditors",
             "PrincipalType": "GROUP",
             "PermissionSetName": "ViewOnlyAccess",
-            "Target": [11111111111, "ou-12345678"],
+            "Target": ["111111111111", "ou-1234-12345678"],
         },
         {
             "PrincipalId": "EXAMPLEAWSSecurityAuditors",
@@ -523,7 +523,7 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
 
         test_response_ou, _ = (
             resolve_permission_sets_and_assignments.list_accounts_in_identifier(
-                identifier="ou-12345678",
+                identifier="ou-1234-12345678",
                 all_accounts_map=accounts_map,
                 all_ous_map={},
                 boto_config=self.mock_boto_config,

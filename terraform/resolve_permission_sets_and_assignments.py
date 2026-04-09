@@ -328,9 +328,20 @@ def resolve_ou_names(
     results = []
     # Include the current OU unless it's the root
     if not re.match(r"^r-", ou_id):
-        this_ou = client.describe_organizational_unit(
-            OrganizationalUnitId=ou_id,
-        )["OrganizationalUnit"]
+        logging.info(
+            f"Resolving OU ID {ou_id} to its name and adding it to the list of OUs to resolve"
+        )
+        try:
+            this_ou = client.describe_organizational_unit(
+                OrganizationalUnitId=ou_id,
+            )["OrganizationalUnit"]
+        except Exception as e:
+            logging.error(
+                f"Error resolving OU ID {ou_id} to its name. Reason: {repr(e)}"
+            )
+            raise Exception(
+                f"Error resolving OU ID {ou_id} to its name. Reason: {repr(e)}"
+            )
         results.append(this_ou)
     # Get its children
     response = client.list_organizational_units_for_parent(ParentId=ou_id)
@@ -568,6 +579,7 @@ def resolve_targets(
     If root is specified, however, all accounts in the Organization (except the management account) will be included.
     """
     account_list = []
+    updated_identifier_cache = identifier_cache
     identifier_string = f"{each_current_assignments['Target']}|{each_current_assignments['PrincipalId']}|{each_current_assignments['PermissionSetName']}"
     log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
     for eachTarget in each_current_assignments["Target"]:

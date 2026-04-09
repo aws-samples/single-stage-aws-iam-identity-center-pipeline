@@ -309,12 +309,17 @@ def validate_assignments(
     errors = []
     errors += validate_assignments_have_unique_identifiers(assignment_templates)
     for assignment_template in assignment_templates.values():
-        validate_management_permission_sets_are_isolated(
+        isolation_errors = validate_management_permission_sets_are_isolated(
             assignment_template, management_account_id=management_account_id
         )
-        validate_no_control_tower_psets_used_in_member_accounts(
-            assignment_template,
+        control_tower_pset_errors = (
+            validate_no_control_tower_psets_used_in_member_accounts(
+                assignment_template,
+            )
         )
+        errors.extend(isolation_errors)
+        errors.extend(control_tower_pset_errors)
+
     return errors
 
 

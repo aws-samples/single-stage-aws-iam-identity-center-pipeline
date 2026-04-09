@@ -33,13 +33,23 @@ def group_assignments_by_permission_set(yaml_dir):
                     permission_set_name = assignment["PermissionSetName"]
                     principal_id = assignment["PrincipalId"]
                     principal_type = assignment["PrincipalType"]
-                    targets = assignment.get("Target", [])
+                    targets_raw = assignment.get("Target", [])
+                    # Convert any numeric values in the target list to strings, padded to 12 digits
+                    targets = []
+                    for raw_target in targets_raw:
+                        if isinstance(raw_target, (int, float)):
+                            targets.append(f"{raw_target:012d}")
+                        else:
+                            targets.append(raw_target)
 
                     key = (permission_set_name, principal_id, principal_type)
                     if key not in grouping:
                         grouping[key] = []
                     grouping[key].extend(targets)
             # Structure the data to dump it to YAML
+            logging.warning(
+                f"These are the targets: {targets}, and this is the grouping: {grouping}"
+            )
             new_data = {
                 "Assignments": [
                     {

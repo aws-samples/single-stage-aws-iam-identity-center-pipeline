@@ -19,10 +19,13 @@ variables:
   DESTROY: ${DESTROY}
   PLAN: "$TF_ROOT/plan.cache"
   PLAN_JSON: "$TF_ROOT/plan.json"
-  BUILD_IMAGE: domain/org/projects/imageserver/imagename:tag
+  BUILD_IMAGE: hashicorp/terraform:latest # this is an Alpine Linux docker image published by Hashicorp
 
 image:
   name: ${BUILD_IMAGE}
+  entrypoint:
+    - '/usr/bin/env'
+    - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 cache:
   key: "${CI_PIPELINE_ID}"
   paths:
@@ -34,16 +37,16 @@ cache:
     - |
       echo "* Running terraform init..."
       cd ${TF_ROOT}
-      gitlab-terraform init ${TF_PARAMS}
+      terraform init ${TF_PARAMS}
       echo "* terraform init complete."
-      pip install PyYAML
+      
 
 .validate: &validate
   script:
     - |
       echo "* Running terraform validate..."
       cd ${TF_ROOT}
-      gitlab-terraform validate ${TF_PARAMS}
+      terraform validate ${TF_PARAMS}
       echo "* terraform validate complete." 
 
 .plan: &plan
@@ -51,7 +54,7 @@ cache:
     - |
       echo "* Running terraform plan..."
       cd ${TF_ROOT}
-      gitlab-terraform plan -out=$PLAN ${TF_PARAMS}
+      terraform plan -out=$PLAN ${TF_PARAMS}
       echo "* terraform plan complete."
     - terraform show --json $PLAN > $PLAN_JSON
     - cat $PLAN_JSON | jq -r '([.resource_changes[]?.change.actions?]|flatten)|{"create":(map(select(.=="create"))|length),"update":(map(select(.=="update"))|length),"delete":(map(select(.=="delete"))|length)}' > $PLAN_JSON
@@ -66,7 +69,7 @@ cache:
     - |
       echo "* Running terraform apply..."
       cd ${TF_ROOT}
-      gitlab-terraform apply
+      terraform apply
       echo "* terraform apply complete."
 
 # .destroy: &destroy
@@ -74,7 +77,7 @@ cache:
 #     - |
 #       echo "* Running terraform destroy..."
 #       cd ${TF_ROOT}
-#       gitlab-terraform destroy ${TF_PARAMS}
+#       terraform destroy ${TF_PARAMS}
 #       echo "* terraform destroy complete."
 
 # TODO: Post plan in MR docs: https://docs.gitlab.com/ee/user/infrastructure/iac/mr_integration.html
