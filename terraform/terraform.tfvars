@@ -1,1 +1,1 @@
-region = "us-east-2" # "YOUR_REGION_HERE"
+region = "us-east-1" # "YOUR_REGION_HERE"

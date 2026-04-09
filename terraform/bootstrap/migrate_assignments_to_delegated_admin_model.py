@@ -495,14 +495,19 @@ def main(read_only, region):
                         target_account=account_assignment["AccountId"],
                         boto3_config=boto3_config,
                     )
-    print(f"[ACTION REQUIRED] In case you missed it the first time...")
-    print(
-        f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
-    )
-    list_of_permission_sets_to_unprovision = "\n".join(migrated_permission_set_names)
-    print(
-        f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {list_of_permission_sets_to_unprovision}"
-    )
+    if len(migrated_permission_set_names) > 0:
+        print(
+            f"[ACTION REQUIRED] It is HIGHLY recommended to remove the original non-CT permission sets from the management account to avoid confusion and accidental use. The permission sets to remove are listed below."
+        )
+        print(
+            f"[ACTION REQUIRED] Assignments have been migrated for the following permission sets, but YOU WILL NEED TO MANUALLY REMOVE THESE PERMISSION SETS FROM THE LIST OF PERMISSION SETS PROVISIONED TO THE MANAGEMENT ACCOUNT."
+        )
+        list_of_permission_sets_to_unprovision = "\n".join(
+            migrated_permission_set_names
+        )
+        print(
+            f"[ACTION REQUIRED] Permission Sets to unprovision from the management account using the AWS Console:\n {list_of_permission_sets_to_unprovision}"
+        )
 
 
 if __name__ == "__main__":

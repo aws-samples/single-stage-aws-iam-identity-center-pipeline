@@ -1,9 +1,11 @@
 # Single-Stage AWS Identity Center (formerly known as SSO) Pipeline 
 
-This pattern helps you to manage [AWS IAM Identity Center](https://aws.amazon.com/iam/identity-center/) permissions in your multi-account environment as code. With this pattern, you will be able to achieve the following defined as code:
+This pattern helps you to manage [AWS IAM Identity Center](https://aws.amazon.com/iam/identity-center/) permissions in one place, in simple, human-readable JSON/YAML files. And it's all logically organized in files based on users/groups so you can easily see all the access a given principal has access to. There's even a script to convert your existing permission sets and assignments into this format automatically.
 
-- Create, delete and update permission sets
-- Create, update or delete assignments from your permission set with your target (AWS accounts, AWS Organization Units, or the entire Organization) with your federated users from your AWS IAM Identity Center Identity Store (e.g. Microsoft Active Directory)
+With this pattern, you will be able to achieve the following defined as code:
+
+- Using human-readable JSON, create, delete and update permission sets
+- Using human-readable YAML, Create, update or delete assignments from your permission set with your target (AWS accounts, AWS Organization Units, or the entire Organization) with your federated users from your AWS IAM Identity Center Identity Store (e.g. Microsoft Active Directory)
 
 As a rule of thumb, SSO permissions have three components: a **user group** (_who_ is allowed access?), an **account** (_where_ are they allowed access?), and a **permission set** (_what_ access is allowed?).
 
@@ -27,7 +29,7 @@ To deploy this solution, ensure you have the following requirements:
 
 - A multi-account environment with AWS Organizations.
 - A CI/CD platform (eg. GitHub Actions) capable of assuming AWS roles securely, running Python3 scripts, and running Terraform version 1.5+ (to support the use of `import` blocks).
-- An account to serve as the Identity Center delegated administrator account.
+- An account to serve as the Identity Center **delegated administrator** account.
   - A double-warning here: this solution is NOT designed to be run from the management account. Designate a delegated administrator: it's an AWS best practice.
 - A role that can be assumed by your pipeline to make SSO changes in the delegated administrator account. This can be provisioned using [Role Vending Machine](https://github.com/aws-samples/role-vending-machine) or another mechanism for granting a pipeline AWS access.
 - Infrastructure for Terraform state management, such as an S3 bucket to hold TF state and DynamoDB table to manage locks.
@@ -37,11 +39,11 @@ To deploy this solution, ensure you have the following requirements:
 1. **Stage your environment**
    1. Verify the prerequisites above.
    2. Create a repository in your version control system (eg. GitHub) with a copy of this repository's code.
-   3. If you have not done so yet, determine the delegated administrator account and configure it. The term `SSO Account` below will refer to the delegated administrator account.
+   3. If you have not done so yet, determine the delegated administrator account and **configure it with the following specifications below**. The term `SSO Account` below will refer to the delegated administrator account.
       1. To make an account into a delegated administrator, you will need to log into the management account, navigate to the Identity Center console, go to Settings, and register your selected account as a delegated administrator.
       2. Additionally, this solution relies on delegating certain additional read-only Organizations permissions to the IdC delegated administrator so that it can resolve OU names into child account names. The permissions required for the delegated administrator are saved in `docs/required_org_permissions.json` and can be provided via the Organizations console in the management account.
       3. If you have permission sets that are used by **both** the management account and at least one non-management account (hereafter called "shared permission sets"), you will need to split the shared permission set into 2 permission sets: one for management and one for non-management. This is a limitation of using a [delegated administrator account](https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin.html#delegated-admin-best-practices). This change is most easily accomplished by (in the *management* account) copying the shared permission set and naming the copied permission set "<ORIGINAL_NAME>_MGMTACCT", then updating the management account's assignments to reference that `_MGMTACCT` permission set instead. The scripts in this repository are designed to skip permission sets containing `MGMTACCT`.
-         1. The script `bootstrap/migrate_assignments_to_delegated_admin_model.py` can assist with migrating permission sets to fit the delegated administrator model. However, make sure to read the implications surrounding Control Tower, Service Control Policies, and IAC carefully first.
+         1. The script `terraform/bootstrap/migrate_assignments_to_delegated_admin_model.py` can assist with migrating permission sets to fit the delegated administrator model. However, make sure to read the documentation in this script first to understand the implications surrounding Control Tower, Service Control Policies, and IAC carefully first.
 2. **Tailor the Terraform Infrastructure**
    1. Update the `backend.tf` file in the root with references to your Terraform state infrastructure.
    2. Update any region specifications to the region that contains your existing SSO Identity Store. Find and replace any values labeled `YOUR_REGION_HERE`.
@@ -49,7 +51,7 @@ To deploy this solution, ensure you have the following requirements:
    4. Update the configuration in `.github/workflows/.env` with the SSO account ID and pipeline role that will be used to deploy this infrastructure. Make sure that you are using a pipeline role with appropriate permissions to create/destroy the resources. 
 3. **Generate imports and JSON/YAML files**
    1. These steps are intended for the delegated administrator account. You should assume local credentials that allow you to access the delegated administrator account. The scripts will not touch `MGMTACCT` resources; this will only onboard non-management resources to Terraform.
-   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips). If running from the management account, add the `--non-delegated-admin-mode` flag to ensure that management permission sets are not skipped.
+   2. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_permission_sets_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>` to help generate import files. This will read the existing permission sets in the environment and convert them into Terraform import files and JSON permission sets. It will not import Control Tower-managed permission sets (see the script for details of which it skips). If running from the management account, add the `--non-delegated-admin-mode` flag to ensure that management permission sets are not skipped.
    3. From the `terraform` folder (`cd terraform`), run `python3 ./bootstrap/create_assignment_import_manifest.py --region <YOUR CONTROL TOWER HOME REGION>`  to help generate assignment files. This will read the existing permission set assignments in the environment and convert them into Terraform import files and YAML assignment files. It will not import Control Tower-managed assignments (see the script for details of which it skips).
    4. If you specified `--non-delegated-admin-mode`, review the contents of the `member_imports` folder. If the contents look good, **move** the `member_imports/import_*.tf` files to the `terraform` folder and delete the `member_imports` folder.
       1. The scripts will also generate a `management_imports` folder for reference. You may review this to understand what resources are not accessible by the delegated administrator account. However, this `management_imports` folder is not used for this delegated administrator solution and should be deleted.
