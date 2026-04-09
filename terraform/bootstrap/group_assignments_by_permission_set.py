@@ -49,7 +49,8 @@ def group_assignments_by_permission_set(yaml_dir):
             # Structure the data to dump it to YAML
             logging.warning(
                 f"These are the targets: {targets}, and this is the grouping: {grouping}"
-            )
+            logging.debug(
+                f"These are the targets: {targets}, and this is the grouping: {grouping}"
             new_data = {
                 "Assignments": [
                     {
