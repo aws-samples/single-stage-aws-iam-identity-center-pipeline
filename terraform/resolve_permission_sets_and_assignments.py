@@ -400,6 +400,63 @@ def get_all_accounts_in_ou(
     return all_accounts
 
 
+def list_accounts_from_tag_target_with_operators(
+    identifier: str, all_accounts_map: dict
+) -> list:
+    """
+    Given a tag target identifier of the form "ACCOUNTTAG:<key1>=<value1>&&<key2>=<value2>||<key3>=<value3>", returns a list of account IDs that match the tag criteria following left-to-right order of operations.
+
+    && indicates intersection (logical "AND" operator)
+    || indicates union (logical "OR" operator)
+    """
+    try:
+        pattern = re.compile(r"(?P<operator>&&|\|\|)?(?P<key>[^=]+)=(?P<value>[^&|]+)")
+        body = identifier[len("ACCOUNTTAG:") :]
+        tag_criteria = []
+        for match in pattern.finditer(body):
+            operator = match.group("operator")
+            if operator is None:
+                operator = "||"  # Default to OR for the first criteria if no operator is specified
+            key = match.group("key")
+            value = match.group("value")
+            tag_criteria.append((operator, key, value))
+    except Exception as e:
+        logging.error(
+            f"Error parsing tag target identifier '{identifier}'. Tag target identifiers must be in the format 'ACCOUNTTAG:<key>=<value>'. Reason: {repr(e)}"
+        )
+        raise Exception(
+            f"Error parsing tag target identifier '{identifier}'. Tag target identifiers must be in the format 'ACCOUNTTAG:<key>=<value>'. Reason: {repr(e)}"
+        )
+
+    current_accounts = set()
+    for operator, key, value in tag_criteria:
+        accounts_matching_tag_target = []
+        # all_accounts_map is a dict that maps names of accounts to a dict of id and a list of tags
+        # We need to walk through all entries in the dict and create a list of IDs associated with tags that match
+        for account_info in all_accounts_map.values():
+            for each_tag_info in account_info.get("tags", []):
+                if each_tag_info["Key"] == key and each_tag_info["Value"] == value:
+                    accounts_matching_tag_target.append(account_info["id"])
+        # Apply the operator function as appropriate
+        if operator == "&&":
+            current_accounts = current_accounts.intersection(
+                set(accounts_matching_tag_target)
+            )
+        elif operator == "||":
+            current_accounts = current_accounts.union(set(accounts_matching_tag_target))
+
+    # Convert from set of IDs to list of dicts
+    return_value = []
+    for eachAccount in current_accounts:
+        return_value.append(
+            {
+                "Id": eachAccount,
+                "Status": "ACTIVE",
+            }
+        )
+
+    return return_value
+
 def list_accounts_in_identifier(
     identifier: str,
     # This account map is expected to include ONLY active accounts
@@ -409,10 +466,11 @@ def list_accounts_in_identifier(
     identifier_cache: dict,
 ):
     """
-    Given an identifier (which can be an OU ID, OU name, account name, root ID, or literal 'ROOT'), returns a list of all accounts in that OU/root.
+    Given an identifier (which can be an OU ID, OU name, account name, root ID, a tag target, or literal 'ROOT'), returns a list of all accounts in that OU/root.
 
     Root will include ALL accounts in the organization (except the management account)
     OU names/IDs WILL be recursively walked; if multiple OUs with the same name are found, an exception will be thrown
+    Tag targets take the form "ACCOUNTTAG:<key>=<value>" and will resolve to all accounts with that tag key and value. # TODO - support AND/OR logic
 
     If the identifier already exists in the cache, just use the locally-stored value
     """
@@ -428,12 +486,18 @@ def list_accounts_in_identifier(
     # Case for OU ID
     if re.match(r"ou-", identifier):
         ou_id = identifier
+    elif re.match(r"^ACCOUNTTAG:", identifier):
+        accounts_matching_tag_target = list_accounts_from_tag_target_with_operators(
+            identifier,
+            all_accounts_map,
+        )
+        results.extend(accounts_matching_tag_target)
     # Case for Root
     elif "r-" in identifier or "ROOT" == identifier.upper():
         for each_account in all_accounts_map.values():
             results.append(
                 {
-                    "Id": each_account,
+                    "Id": each_account["id"],
                     "Status": "ACTIVE",
                 }
             )
@@ -456,7 +520,7 @@ def list_accounts_in_identifier(
         elif identifier in all_accounts_map:
             results.append(
                 {
-                    "Id": all_accounts_map[identifier],
+                    "Id": all_accounts_map[identifier]["id"],
                     "Status": "ACTIVE",
                 }
             )
@@ -584,7 +648,9 @@ def resolve_targets(
     log.info(f"[Identifier: {identifier_string}] Resolving target in accounts")
     for eachTarget in each_current_assignments["Target"]:
         # Accounts by ID
-        string_target = str(eachTarget)
+        string_target = str(
+            eachTarget
+        )  # TODO - ensure that leading zeros are handled correctly
         pattern = re.compile(r"\d{12}")  # Regex for AWS Account Id
         if pattern.match(string_target):
             account_list.append(string_target)
@@ -732,10 +798,20 @@ def create_assignments_manifest_from_repo_assignments(
         response = org_client.list_accounts(NextToken=response["NextToken"])
         all_accounts_response_list.extend(response.get("Accounts", []))
     # Convert list of accounts to map of Names --> IDs
+    # NOTE - this requires that all accounts in the Organization are named uniquely.
     for eachAccount in all_accounts_response_list:
         if eachAccount["Status"] != "ACTIVE":
             continue
-        all_accounts_map[eachAccount["Name"]] = eachAccount["Id"]
+        if eachAccount["Name"] in all_accounts_map:
+            raise Exception(
+                f"Duplicate account name detected ({eachAccount['Name']}). This is not allowed for this solution and represents a potential point of confusion for operations at large. Please check the account names in your Organization and rename them as necessary."
+            )
+        all_accounts_map[eachAccount["Name"]] = {
+            "id": eachAccount["Id"],
+            "tags": org_client.list_tags_for_resource(ResourceId=eachAccount["Id"])[
+                "Tags"
+            ],
+        }
 
     # Get OUs map
     root_id = org_client.list_roots()["Roots"][0]["Id"]
