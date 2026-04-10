@@ -27,7 +27,7 @@ Documentation of their content is detailed in the `terraform/source/JSON_Structu
 
 To deploy this solution, ensure you have the following requirements:
 
-- A multi-account environment with AWS Organizations.
+- A multi-account environment with AWS Organizations, with unique names for each account. Accounts can be renamed using the Management account, if Trusted Access for 'AWS Account Management' is enabled.
 - A CI/CD platform (eg. GitHub Actions) capable of assuming AWS roles securely, running Python3 scripts, and running Terraform version 1.5+ (to support the use of `import` blocks).
 - An account to serve as the Identity Center **delegated administrator** account.
   - A double-warning here: this solution is NOT designed to be run from the management account. Designate a delegated administrator: it's an AWS best practice.
