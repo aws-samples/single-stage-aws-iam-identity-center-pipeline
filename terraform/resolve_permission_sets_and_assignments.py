@@ -457,6 +457,7 @@ def list_accounts_from_tag_target_with_operators(
 
     return return_value
 
+
 def list_accounts_in_identifier(
     identifier: str,
     # This account map is expected to include ONLY active accounts
@@ -491,6 +492,10 @@ def list_accounts_in_identifier(
             identifier,
             all_accounts_map,
         )
+        if len(accounts_matching_tag_target) == 0:
+            logging.warning(
+                f"No accounts were found that matched the tag target '{identifier}'"
+            )
         results.extend(accounts_matching_tag_target)
     # Case for Root
     elif "r-" in identifier or "ROOT" == identifier.upper():
