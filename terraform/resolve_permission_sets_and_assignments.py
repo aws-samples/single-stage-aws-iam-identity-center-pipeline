@@ -372,12 +372,12 @@ def get_all_accounts_in_ou(
     [
         {
             "Id": "111111111111",
-            "Status": "ACTIVE",
+            "State": "ACTIVE",
             ...
         },
         {
             "Id": "222222222222",
-            "Status": "ACTIVE",
+            "State": "ACTIVE",
             ...
         }
     ]
@@ -387,14 +387,14 @@ def get_all_accounts_in_ou(
     for each_ou in all_ous:
         response = client.list_accounts_for_parent(ParentId=each_ou["Id"])
         for each_account in response["Accounts"]:
-            if each_account["Status"] == "ACTIVE":
+            if each_account["State"] == "ACTIVE":
                 all_accounts.append(each_account)
         while "NextToken" in response:
             response = client.list_accounts_for_parent(
                 ParentId=ou_id, NextToken=response["NextToken"]
             )
             for each_account in response["Accounts"]:
-                if each_account["Status"] == "ACTIVE":
+                if each_account["State"] == "ACTIVE":
                     all_accounts.append(each_account)
 
     return all_accounts
@@ -451,7 +451,7 @@ def list_accounts_from_tag_target_with_operators(
         return_value.append(
             {
                 "Id": eachAccount,
-                "Status": "ACTIVE",
+                "State": "ACTIVE",
             }
         )
 
@@ -503,7 +503,7 @@ def list_accounts_in_identifier(
             results.append(
                 {
                     "Id": each_account["id"],
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 }
             )
     # Case for free text identifiers
@@ -526,7 +526,7 @@ def list_accounts_in_identifier(
             results.append(
                 {
                     "Id": all_accounts_map[identifier]["id"],
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 }
             )
         else:
@@ -546,7 +546,7 @@ def list_accounts_in_identifier(
     # Filter out any inactive accounts
     account_list = []
     for eachResult in results:
-        if eachResult["Status"] == "ACTIVE":
+        if eachResult["State"] == "ACTIVE":
             account_list.append(eachResult["Id"])
     identifier_cache[identifier] = account_list
     return account_list, identifier_cache
@@ -805,7 +805,7 @@ def create_assignments_manifest_from_repo_assignments(
     # Convert list of accounts to map of Names --> IDs
     # NOTE - this requires that all accounts in the Organization are named uniquely.
     for eachAccount in all_accounts_response_list:
-        if eachAccount["Status"] != "ACTIVE":
+        if eachAccount["State"] != "ACTIVE":
             continue
         if eachAccount["Name"] in all_accounts_map:
             raise Exception(
