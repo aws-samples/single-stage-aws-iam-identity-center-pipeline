@@ -147,7 +147,7 @@ if __name__ == "__main__":
         logging.info(f"Processing account {account}...")
         # If the account is suspended, skip it
         account_response = org_client.describe_account(AccountId=account)["Account"]
-        account_status = account_response["Status"]
+        account_status = account_response["State"]
         account_name = account_response["Name"]
         if account_status == "SUSPENDED":
             logging.warning(
@@ -331,7 +331,7 @@ import {{
             AccountId=account_target
         )["Account"]
         account_target_name = describe_account_response["Name"]
-        if describe_account_response["Status"] == "SUSPENDED":
+        if describe_account_response["State"] == "SUSPENDED":
             logging.warning(f"Skipping SUSPENDED account named {account_target_name}")
             continue
         principal_name = assignment_dict[tf_index]["details"]["principal_name"]
