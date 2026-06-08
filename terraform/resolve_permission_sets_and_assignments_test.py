@@ -490,11 +490,11 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             "Accounts": [
                 {
                     "Id": "111111111111",
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 },
                 {
                     "Id": "222222222222",
-                    "Status": "SUSPENDED",
+                    "State": "SUSPENDED",
                 },
             ]
         }
@@ -504,19 +504,19 @@ resource "aws_ssoadmin_permissions_boundary_attachment" "TestPermissionSet_permi
             "Accounts": [
                 {
                     "Id": "111111111111",
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 },
                 {
                     "Id": "222222222222",
-                    "Status": "SUSPENDED",
+                    "State": "SUSPENDED",
                 },
                 {
                     "Id": "333333333333",
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 },
                 {
                     "Id": "444444444444",
-                    "Status": "ACTIVE",
+                    "State": "ACTIVE",
                 },
             ]
         }
