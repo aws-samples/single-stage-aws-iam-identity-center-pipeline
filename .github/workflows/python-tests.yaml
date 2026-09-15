@@ -1,0 +1,51 @@
+# Unit tests for the Python resolver and validation scripts.
+#
+# This workflow is deliberately separate from the Terraform plan/apply workflows:
+# those require OIDC role assumption and an .env pointing at a real AWS account, so
+# they cannot run on a fresh clone or a fork's pull request. These tests mock every
+# boto3 client, so they need no credentials and will run anywhere.
+
+name: Python Tests
+
+permissions:
+  contents: read # for actions/checkout to fetch code
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Reusable, so this can be composed into another workflow if desired
+  workflow_call:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # The test modules import the scripts by bare module name, so the terraform
+        # directory must be the working directory.
+        working-directory: terraform
+    env:
+      # Every test patches boto3.client, so no real credentials are needed. These
+      # dummy values make an accidentally-unpatched client fail fast with a
+      # credential error instead of hanging while it probes the instance metadata
+      # service.
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+      AWS_SESSION_TOKEN: testing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r ../requirements.txt -r ../requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m unittest discover -p "*_test.py" -v

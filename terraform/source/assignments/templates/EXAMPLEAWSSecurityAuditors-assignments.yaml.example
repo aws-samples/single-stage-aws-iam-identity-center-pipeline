@@ -3,8 +3,8 @@ Assignments:
   PrincipalType: GROUP
   PermissionSetName: ViewOnlyAccess
   Target:
-  - 11111111111 # ID of an account -- remember to quote it so that it's interpreted as a string
-  - ou-12345678 # ID of an OU
+  - '111111111111' # ID of an account -- always quote it, or YAML reads it as a number and removes any leading zero
+  - ou-1234-12345678 # ID of an OU
 - PrincipalId: EXAMPLEAWSSecurityAuditors
   PrincipalType: GROUP
   PermissionSetName: ReadOnlyAccess
@@ -16,3 +16,6 @@ Assignments:
   PermissionSetName: SecurityAudit
   Target:
   - ROOT # Special keyword to target all accounts in the organization
+  Exclusions: # Optional. Targets removed from the resolved list. Same input types as Target
+  - Audit # Name of an account
+  - SandboxOU # Name of an OU

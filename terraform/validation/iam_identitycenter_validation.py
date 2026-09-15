@@ -26,6 +26,11 @@ import logging
 import re
 import yaml
 from .validate_policies import validate_policies
+from .identifiers import (
+    is_aws_account_id,
+    is_valid_terraform_identifier,
+    parse_customer_managed_policy_reference,
+)
 from collections import Counter
 from typing import List
 from botocore.exceptions import ClientError
@@ -177,56 +182,90 @@ def validate_assignments_have_unique_identifiers(assignments_templates):
 #     return errors
 
 
+# Client error codes that indicate a problem with the template, rather than a problem
+# with the caller's permissions or with the service. These are reported as findings.
+# Any other client error is re-raised: a validator that reports "policy not found"
+# when it actually cannot read IAM would be worse than a crash.
+TEMPLATE_ERROR_CODES = ("NoSuchEntity", "InvalidInput", "ValidationError")
+
+
+def build_customer_policy_arn(account_id: str, path: str, policy_name: str) -> str:
+    """
+    Builds the ARN of a customer managed policy from its account, path and name.
+
+    The path is normalised to start and end with a slash, because an IAM policy ARN
+    always has exactly one slash between "policy" and the path.
+    """
+    normalised_path = str(path or "/").strip("/")
+    if normalised_path:
+        normalised_path = f"/{normalised_path}/"
+    else:
+        normalised_path = "/"
+    return f"arn:aws:iam::{account_id}:policy{normalised_path}{policy_name}"
+
+
 def validate_managed_policies_arn(permission_set_object, current_account_id):
     """
     Returns a list of errors in managed policies and permission boundaries.
     """
     errors = []
-    permission_set_name = permission_set_object["Name"]
+    permission_set_name = permission_set_object.get("Name", "<unnamed permission set>")
 
     client = boto3.client("iam")
-    try:
-        # This basically checks whether the managed policy exists
-        log.info(
-            f"Analyzing the permission set managed policies for permission set {permission_set_name}."
-        )
-        for each_managed_policy in permission_set_object["ManagedPolicies"]:
+    log.info(
+        f"Analyzing the permission set managed policies for permission set {permission_set_name}."
+    )
+    # ManagedPolicies is optional: a permission set may instead use only
+    # CustomerManagedPolicies or only CustomPolicy.
+    for each_managed_policy in permission_set_object.get("ManagedPolicies", []):
+        # The loop body handles its own errors so that one bad policy does not stop
+        # the remaining policies from being checked.
+        try:
+            # This basically checks whether the managed policy exists
             _ = client.get_policy(PolicyArn=each_managed_policy)
-    # Handle when resource is not found
-    except ClientError as error:
-        if error.response["Error"]["Code"] == "NoSuchEntity":
-            error_string = (
-                f"[{permission_set_name}] An issue was found in the managed policy. Reason: "
-                + str(error)
-            )
-            log.error(error_string)
-            errors.append(error_string)
-        else:
-            # Unknown Client Error
-            raise error
+        # Handle when resource is not found
+        except ClientError as error:
+            if error.response["Error"]["Code"] in TEMPLATE_ERROR_CODES:
+                error_string = (
+                    f"[{permission_set_name}] An issue was found in the managed policy "
+                    f"'{each_managed_policy}'. Reason: " + str(error)
+                )
+                log.error(error_string)
+                errors.append(error_string)
+            else:
+                # Unknown Client Error
+                raise error
 
-    try:
-        log.info(
-            f"[{permission_set_name}] Analyzing permission boundary policies from permission set"
-        )
-        customer_permission_boundary_object = permission_set_object.get(
-            "CustomerPermissionBoundary", {}
-        )
-        if re.match(r"^arn:aws", customer_permission_boundary_object.get("Name", "")):
-            error_string = f"[{permission_set_name}] You specified an permission boundary ARN instead of name. Please specify a name."
-            log.error(error_string)
-            errors.append(error_string)
-        elif customer_permission_boundary_object:
-            _ = client.get_policy(
-                PolicyArn=f"arn:aws:iam::{current_account_id}:policy/{customer_permission_boundary_object['Path']}{customer_permission_boundary_object['Name']}"
-            )
-    except Exception as error:
-        error_string = (
-            f"[{permission_set_name}] An issue was found in the AWS managed permission boundary policy. Reason: "
-            + str(error)
-        )
+    log.info(
+        f"[{permission_set_name}] Analyzing permission boundary policies from permission set"
+    )
+    customer_permission_boundary_object = permission_set_object.get(
+        "CustomerPermissionBoundary", {}
+    )
+    if re.match(r"^arn:aws", customer_permission_boundary_object.get("Name", "")):
+        error_string = f"[{permission_set_name}] You specified an permission boundary ARN instead of name. Please specify a name."
         log.error(error_string)
         errors.append(error_string)
+    elif customer_permission_boundary_object:
+        # Path is optional, and the resolver defaults a missing Path to "/".
+        boundary_arn = build_customer_policy_arn(
+            account_id=current_account_id,
+            path=customer_permission_boundary_object.get("Path", "/"),
+            policy_name=customer_permission_boundary_object["Name"],
+        )
+        try:
+            _ = client.get_policy(PolicyArn=boundary_arn)
+        except ClientError as error:
+            if error.response["Error"]["Code"] in TEMPLATE_ERROR_CODES:
+                error_string = (
+                    f"[{permission_set_name}] An issue was found in the customer managed "
+                    f"permission boundary policy '{boundary_arn}'. Reason: " + str(error)
+                )
+                log.error(error_string)
+                errors.append(error_string)
+            else:
+                # Unknown Client Error
+                raise error
     return errors
 
 
@@ -287,17 +326,165 @@ def validate_no_control_tower_psets_used_in_member_accounts(assignment_template)
     return errors
 
 
+def validate_permission_set_names_are_terraform_identifiers(
+    permission_set_templates: dict,
+) -> List[str]:
+    """
+    Returns a list of errors for any permission set Name that cannot be used as a
+    Terraform identifier.
+
+    The Name is written into six Terraform resource labels and references. A Name that
+    Terraform does not accept produces a generated manifest that does not parse. That
+    manifest is not committed to the repository, so the parse error names a file the
+    reader cannot open. Reject the Name here instead.
+    """
+    errors = []
+    for source_file, permission_set_template in permission_set_templates.items():
+        permission_set_name = permission_set_template.get("Name", "")
+        if not is_valid_terraform_identifier(permission_set_name):
+            error_string = (
+                f"ERROR - Permission set name '{permission_set_name}' in file "
+                f"'{source_file}' cannot be used as a Terraform identifier. A name must "
+                "start with a letter or an underscore, and can then contain only "
+                "letters, digits, underscores and dashes."
+            )
+            log.error(error_string)
+            errors.append(error_string)
+    return errors
+
+
+def validate_customer_managed_policy_paths(
+    permission_set_template: dict,
+    source_file: str = "",
+) -> List[str]:
+    """
+    Returns a list of errors for any customer managed policy path that does not start
+    with a slash.
+
+    AWS requires a policy path to start with a slash. A value such as
+    "sso/global/myPolicy" looks correct and is not, and AWS rejects it at apply time,
+    which is after review and after merge. Reject it here instead.
+
+    This also catches a policy ARN, which is not a supported value: the template must
+    hold a policy name, optionally prefixed with its path.
+    """
+    errors = []
+    permission_set_name = permission_set_template.get("Name", "<unnamed permission set>")
+    location = f" in file '{source_file}'" if source_file else ""
+
+    for policy_reference in permission_set_template.get("CustomerManagedPolicies", []):
+        path, policy_base_name = parse_customer_managed_policy_reference(
+            policy_reference
+        )
+        if not path.startswith("/"):
+            error_string = (
+                f"[{permission_set_name}] The customer managed policy "
+                f"'{policy_reference}'{location} has the path '{path}', which does not "
+                f"start with a slash. AWS rejects such a path at apply time. Use "
+                f"'/{path}{policy_base_name}' instead."
+            )
+            log.error(error_string)
+            errors.append(error_string)
+
+    # An absent Path is valid: the resolver uses "/" as the default.
+    boundary = permission_set_template.get("CustomerPermissionBoundary", {})
+    boundary_path = boundary.get("Path")
+    if boundary_path and not str(boundary_path).startswith("/"):
+        error_string = (
+            f"[{permission_set_name}] The CustomerPermissionBoundary path "
+            f"'{boundary_path}'{location} does not start with a slash. AWS rejects such "
+            f"a path at apply time. Use '/{boundary_path}' instead."
+        )
+        log.error(error_string)
+        errors.append(error_string)
+
+    return errors
+
+
+def validate_assignment_targets(assignments: list) -> List[str]:
+    """
+    Returns a list of errors for any Target or Exclusions entry with the wrong shape.
+
+    These checks are structural, so they run before the other assignment checks: those
+    checks index Target[0] and would raise rather than return an error message.
+    """
+    errors = []
+    for assignment in assignments:
+        principal = assignment.get("PrincipalId", "<no PrincipalId>")
+        permission_set = assignment.get("PermissionSetName", "<no PermissionSetName>")
+        label = f"[{principal} / {permission_set}]"
+
+        targets = assignment.get("Target")
+        if not isinstance(targets, list) or not targets:
+            error_string = (
+                f"{label} Target must be a list with at least one entry. Every "
+                "assignment needs a target."
+            )
+            log.error(error_string)
+            errors.append(error_string)
+            continue
+
+        for key in ("Target", "Exclusions"):
+            entries = assignment.get(key, [])
+            if not isinstance(entries, list):
+                error_string = f"{label} {key} must be a list."
+                log.error(error_string)
+                errors.append(error_string)
+                continue
+            for entry in entries:
+                errors += validate_target_entry(entry, key=key, label=label)
+    return errors
+
+
+def validate_target_entry(entry, key: str, label: str) -> List[str]:
+    """
+    Returns a list of errors for a single Target or Exclusions entry.
+    """
+    # A bool is a subclass of int, so check it first.
+    if isinstance(entry, bool):
+        error_string = f"{label} {key} entry '{entry}' must be a string."
+        log.error(error_string)
+        return [error_string]
+
+    if isinstance(entry, int):
+        error_string = (
+            f"{label} {key} entry {entry} was read as a number. Quote every account ID, "
+            f"for example '{entry:012d}', or YAML removes a leading zero and the "
+            "account cannot be found."
+        )
+        log.error(error_string)
+        return [error_string]
+
+    entry_text = str(entry)
+    if entry_text.isdigit() and not is_aws_account_id(entry_text):
+        error_string = (
+            f"{label} {key} entry '{entry_text}' has {len(entry_text)} digits. An AWS "
+            "account ID has exactly 12 digits."
+        )
+        log.error(error_string)
+        return [error_string]
+
+    return []
+
+
 def validate_permission_sets(
     permission_set_templates: dict,
     current_account_id,
 ):
     errors = []
     errors += validate_unique_permission_set_name(permission_set_templates)
-    for permission_set_template in permission_set_templates.values():
+    errors += validate_permission_set_names_are_terraform_identifiers(
+        permission_set_templates
+    )
+    for source_file, permission_set_template in permission_set_templates.items():
         # errors += validate_json_policy_format(permission_set_template)
         errors += validate_managed_policies_arn(
             permission_set_template,
             current_account_id=current_account_id,
+        )
+        errors += validate_customer_managed_policy_paths(
+            permission_set_template,
+            source_file=source_file,
         )
     return errors
 
@@ -306,20 +493,24 @@ def validate_assignments(
     assignment_templates: dict,
     management_account_id: str,
 ):
+    # Read the Assignments list explicitly. An earlier version looped over
+    # assignment_templates.values(), which held exactly one item: the list itself. That
+    # worked only because "Assignments" is the only key.
+    assignments = assignment_templates.get("Assignments", [])
+
+    # Structural checks run first and stop the validation on failure. The checks below
+    # index Target[0], so a malformed Target would raise an IndexError or a KeyError
+    # instead of giving the user an error message.
+    structural_errors = validate_assignment_targets(assignments)
+    if structural_errors:
+        return structural_errors
+
     errors = []
     errors += validate_assignments_have_unique_identifiers(assignment_templates)
-    for assignment_template in assignment_templates.values():
-        isolation_errors = validate_management_permission_sets_are_isolated(
-            assignment_template, management_account_id=management_account_id
-        )
-        control_tower_pset_errors = (
-            validate_no_control_tower_psets_used_in_member_accounts(
-                assignment_template,
-            )
-        )
-        errors.extend(isolation_errors)
-        errors.extend(control_tower_pset_errors)
-
+    errors += validate_management_permission_sets_are_isolated(
+        assignments, management_account_id=management_account_id
+    )
+    errors += validate_no_control_tower_psets_used_in_member_accounts(assignments)
     return errors
 
 
@@ -373,8 +564,14 @@ def main(
         return False
 
     # Policies
+    # Pass the configured path through: validate_policies has its own default, so a
+    # custom permission_set_templates_path previously matched no files at all and the
+    # inline policy check silently passed.
     policy_errors = validate_policies(
         fail_on_types=fail_on_types,
+        permission_sets_path_identifier=os.path.join(
+            permission_set_templates_path, "*.json"
+        ),
     )
     if policy_errors:
         log.error("Policies failed validation. Review findings and correct them:")
@@ -407,7 +604,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fail-on-types",
-        default=["SECURITY_WARNING", "ERROR"],
+        # nargs="+" keeps this a list. Without it, a supplied value is a string, and
+        # the membership test in validate_policies becomes a substring test.
+        nargs="+",
+        default=["ERROR"],
         help="The types of policy findings that should cause the script to fail.",
     )
     args = parser.parse_args()

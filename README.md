@@ -64,7 +64,7 @@ To deploy this solution, ensure you have the following requirements:
       2. The data resolution script also includes a call to the validation script, so you do not need to call the validation script separately.
    2. For an example of how to implement this in GitHub Actions, see the `.github/workflows` folder, specifically the `terraform.yaml` file.
       1. For an example of how to configure a pipeline role for GitHub Actions, see the [role vending machine repository](https://github.com/aws-samples/role-vending-machine).
-   3. For an example of how to implement this in CodeBuild, see the `docs/buildspec.yaml` file.
+   3. For an example of how to implement this in CodeBuild, see the `docs/buildspec.yaml` (plan) and `docs/buildspec-apply.yaml` (apply) files. These are intended as two CodePipeline actions with a **manual approval action between them**, so that no Identity Center change is applied without a reviewed plan. Give the plan action a read-only role; only the apply action needs write permissions.
    4. For an example of how to implement this in GitLab, see the `.gitlab` folder.
    5. You may need to adapt these examples to meet your enterprise's CI/CD needs.
 5. **Validate and Optimize**
@@ -73,7 +73,7 @@ To deploy this solution, ensure you have the following requirements:
    3.  Validate your `terraform plan` output. There should ONLY be imports, and potentially changes to `tags_all` if you keep the default `sso_pipeline=true` tag.
    4.  Merge the code to the `main` branch if the changes look accurate. If using the GitHub workflows provided in `.github/workflows`, merging to `main` will trigger a new pipeline run to perform a `terraform apply`.
    5.  Remove the import files (`import_assignments.tf`, `import_inline_policies.tf`, etc.) after the pipeline's first complete run. Imports can cause errors if they refer to resources that have been deleted (eg. if you import a assignment, then update the code to delete that assignment, attempting to import that assignment using a stale import block would cause an error). Make sure to commit the removal of the files.
-   6.  [Optional] Consider consolidating assignments by OU. For a given user/permission set, the import script will create one assignment item per account. If you grant access to all accounts in an OU, you can instead put the OU ID (or `'ROOT'` for all accounts) as the target instead of the account ID. Note that OU-based assignments will only grant access to accounts directly within the OU, not accounts in sub-OUs. Also note that `'ROOT'` will not create an assignment for the management account, because of the limitations of the delegated administrator account. 
+   6.  [Optional] Consider consolidating assignments by OU. For a given user/permission set, the import script will create one assignment item per account. If you grant access to all accounts in an OU, you can instead put the OU ID (or `'ROOT'` for all accounts) as the target instead of the account ID. **Note that an OU target is recursive**: every account below the OU is included, at any depth. Check the reach of an OU target before you use one, because a target of a high-level OU grants access in every account below it. Also note that `'ROOT'` will not create an assignment for the management account, because of the limitations of the delegated administrator account. 
    7. Verify branch protection rules. Verify that your `main` branch has branch protection rules that, at minimum, require all changes to be done through pull requests with at least 1 approval.
 
 ## External Changes
@@ -87,6 +87,20 @@ You may want to configure automation to re-run this pipeline's `terraform apply`
 This solution splits out management of permission sets used by Management/Root account assignments from the permission sets used by non-Management/Root account assignments. Delegated administration is a security best practice recommended by the AWS Security Reference Architecture. However, the delegated administrator account is disallowed from managing the Management/Root account. Therefore, if you provision SSO roles in the management account, two pipelines and parallel sets of permission sets and assignments are required: one for delegated admin, and one for the management account. However, it is preferable to not provision SSO roles in the management account at all. Having no SSO roles in the management account reduces exposure surface and simplifies SSO management.
 
 To reconcile where a resource belongs to, this solutions establishes a naming convention to distinguish between targets: the identifier `MGMTACCT` is used to indicate JSON files that are part of the management account. Files without the string `MGMTACCT` are assumed to be managed by the delegated administrator account. The validation stage of the pipeline will ensure that `MGMTACCT` permission sets are not assigned to non-management accounts, and that non-`MGMTACCT` permission sets are not assigned to the management account.
+
+## Running the tests
+
+The Python scripts have unit tests alongside them in the `terraform` folder. Every test mocks its boto3 clients, so no AWS credentials and no network access are required.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+cd terraform && python3 -m unittest discover -p "*_test.py" -v
+```
+
+Running from the `terraform` folder is required: the test modules import the scripts by bare module name (eg. `import resolve_permission_sets_and_assignments`).
+
+These tests run automatically on every pull request via `.github/workflows/python-tests.yaml` (and in the GitLab example's `test` stage).
 
 ## Pipeline Overview
 

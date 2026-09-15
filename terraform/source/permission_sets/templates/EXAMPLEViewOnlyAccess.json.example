@@ -15,7 +15,7 @@
     ]
   },
   "CustomerPermissionBoundary": {
-    "Path": "pbounds/",
+    "Path": "/pbounds/",
     "Name": "ViewOnlyAccessPB"
   }
 }

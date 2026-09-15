@@ -1,0 +1,42 @@
+# Example CodeBuild buildspec for the APPLY stage of this pipeline.
+#
+# This buildspec applies the plan file that docs/buildspec.yaml produced and a human
+# approved. It does not run `terraform plan` again: applying a saved plan is what makes
+# the approval meaningful, because what gets applied is exactly what was reviewed.
+#
+# Place this action AFTER a CodePipeline manual approval action. See the header of
+# docs/buildspec.yaml for the full three-action layout.
+#
+# This is the only action that needs a role with write permissions.
+#
+# Do NOT add `-auto-approve`. Applying a saved plan file needs no approval flag, and
+# adding one to a `terraform apply` without a plan file would remove the review.
+
+version: 0.2
+
+env:
+  variables:
+    # Keep in sync with docs/buildspec.yaml and .github/workflows/.env
+    TERRAFORM_VERSION: "1.6.4"
+
+phases:
+  install:
+    commands:
+      - echo "[INFO] [INSTALL] Installing Terraform ${TERRAFORM_VERSION}"
+      - wget -q "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - wget -q "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+      # Verify the download before trusting it
+      - grep " terraform_${TERRAFORM_VERSION}_linux_amd64.zip$" "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum -c -
+      - unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /usr/bin/
+      - chmod +x /usr/bin/terraform
+      - echo "[INFO] [INSTALL] Installing finished"
+    finally:
+      - terraform --version
+  build:
+    commands:
+      - cd terraform
+      # No resolver run and no new plan here. The plan file from the plan stage holds
+      # the reviewed change, including the generated permission set and assignment
+      # resources.
+      - terraform init
+      - terraform apply -input=false -no-color terraform.tfplan

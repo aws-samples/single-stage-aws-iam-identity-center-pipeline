@@ -118,6 +118,37 @@ test:
     - if: $CI_COMMIT_BRANCH == $PRIMARY_BRANCH
       when: always
 
+# Unit tests for the Python resolver and validation scripts. Every test mocks its
+# boto3 clients, so this job needs no AWS credentials and overrides the global
+# before_script to skip OIDC setup entirely.
+unit-tests:
+  stage: test
+  before_script:
+    - apk add --no-cache python3 py3-pip
+  variables:
+    # An accidentally-unpatched boto3 client should fail fast on credentials rather
+    # than hang probing the instance metadata service.
+    AWS_EC2_METADATA_DISABLED: "true"
+    AWS_DEFAULT_REGION: "us-east-1"
+    AWS_ACCESS_KEY_ID: "testing"
+    AWS_SECRET_ACCESS_KEY: "testing"
+    AWS_SESSION_TOKEN: "testing"
+  script:
+    - |
+      echo "* Running Python unit tests..."
+      apk add py3-boto3 py3-yaml # install command for alpine linux (TF docker image flavor)
+      pip install --break-system-packages -r $CI_PROJECT_DIR/requirements-dev.txt
+      # The test modules import the scripts by bare module name, so TF_ROOT must be
+      # the working directory.
+      cd ${TF_ROOT}
+      python3 -m unittest discover -p "*_test.py" -v
+      echo "* Unit tests complete."
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $PRIMARY_BRANCH
+      when: always
+
 apply:
   id_tokens:
     GITLAB_OIDC_TOKEN:

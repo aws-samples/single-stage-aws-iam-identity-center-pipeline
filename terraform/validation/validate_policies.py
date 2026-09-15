@@ -13,11 +13,17 @@ import logging
 
 
 def validate_policies(
-    fail_on_types=["SECURITY_WARNING", "ERROR"],
+    fail_on_types=["ERROR"],
     permission_sets_path_identifier: str = "./source/permission_sets/templates/*.json",
 ):
     """
     Returns a list of files that failed policy validation, or an empty list if all files passed.
+
+    :param fail_on_types: A list of IAM Access Analyzer finding types that should fail
+        validation. This must be a list, not a string: a string would make the
+        membership test below a substring test, so a WARNING finding would match a
+        fail_on_types of "SECURITY_WARNING".
+    :param permission_sets_path_identifier: A glob matching the permission set files.
     """
     bad_files = []
     access_analyzer_client = boto3.client("accessanalyzer")

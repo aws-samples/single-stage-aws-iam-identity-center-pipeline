@@ -1,20 +1,59 @@
+# Example CodeBuild buildspec for the PLAN stage of this pipeline.
+#
+# This pipeline controls IAM Identity Center access across the whole organization, so
+# no stage in it applies a change without a review. This buildspec therefore stops at
+# `terraform plan` and exports the plan as an artifact.
+#
+# Use it as the first of three CodePipeline actions:
+#
+#   1. This buildspec            -> produces terraform.tfplan and plan.txt
+#   2. A manual approval action  -> a human reads plan.txt and approves it
+#   3. docs/buildspec-apply.yaml -> applies the approved terraform.tfplan
+#
+# Give this action a READ-ONLY role. Only the apply action needs write permissions.
+# The GitHub Actions example does the same thing; see the `-readonly` role in
+# .github/workflows/terraform-plan-source.yaml.
+#
+# Do NOT add `-auto-approve` to this file or to the apply buildspec. It would give a
+# path that changes organization-wide access with no plan review and no approval.
+
 version: 0.2
+
+env:
+  variables:
+    # Keep in sync with TERRAFORM_VERSION in .github/workflows/.env
+    TERRAFORM_VERSION: "1.6.4"
+
 phases:
   install:
     commands:
       - echo "[INFO] [INSTALL] Installing dependencies"
       - pip install git-remote-codecommit
-      - echo "[INFO] [INSTALL] Installing finished"
-      - wget https://releases.hashicorp.com/terraform/1.6.4/terraform_1.6.4_linux_amd64.zip
-      - unzip terraform_1.6.4_linux_amd64.zip -d /usr/bin/
+      - pip install -r requirements.txt
+      - echo "[INFO] [INSTALL] Installing Terraform ${TERRAFORM_VERSION}"
+      - wget -q "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+      - wget -q "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"
+      # Verify the download before trusting it
+      - grep " terraform_${TERRAFORM_VERSION}_linux_amd64.zip$" "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum -c -
+      - unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /usr/bin/
       - chmod +x /usr/bin/terraform
+      - echo "[INFO] [INSTALL] Installing finished"
     finally:
       - terraform --version
   build:
     commands:
       - cd terraform
-      - chmod +x resolve_permission_sets_and_assignments.py
+      # Generates permission_sets_auto.tf and assignments_auto.tf, and runs the
+      # validation. This must run before every plan, or Terraform has no resolved data
+      # to work with and proposes to delete every permission set and assignment.
       - python3 resolve_permission_sets_and_assignments.py
-      - terraform init 
-      - terraform plan
-      - terraform apply -auto-approve
+      - terraform init
+      - terraform plan -input=false -no-color -out=terraform.tfplan
+      # A human-readable rendering of the plan, for the approval action to link to
+      - terraform show -no-color terraform.tfplan > plan.txt
+
+artifacts:
+  base-directory: terraform
+  files:
+    - terraform.tfplan
+    - plan.txt

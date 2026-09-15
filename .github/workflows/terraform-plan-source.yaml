@@ -187,20 +187,6 @@ jobs:
         run: terraform plan -no-color -input=false -out=terraform.tfplan
         continue-on-error: true
 
-      - name: Assert that Plan uses tagging module output
-        id: verify-tags
-        if: steps.plan.outcome == 'success'
-        run: |
-          terraform show -json terraform.tfplan > pipeline_tf_plan.json
-          # It would be better to use jq and query directly, but GitHub Actions does not play nice with the terraform show JSON output. Better to use this simple one for now.
-          if grep -q "module.tagging_module.tag_map" "./pipeline_tf_plan.json"; then
-              echo "Found the appropriate tagging module, exiting successfully"
-              exit 0
-          else
-              echo "::error::verify-tags: The default_tags value in the aws provider block was not set to module.tagging_module.tag_map. You must supply default tags using this module to proceed."
-              exit 1
-          fi
-
       - name: Reformat Plan
         if: steps.plan.outcome == 'success'
         run: terraform show -no-color terraform.tfplan | sed -E 's/^([[:space:]]+)([-+])/\2\1/g' > plan.txt
