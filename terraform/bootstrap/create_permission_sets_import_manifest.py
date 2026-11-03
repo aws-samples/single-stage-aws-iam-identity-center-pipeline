@@ -123,15 +123,25 @@ if __name__ == "__main__":  # Get Identity Store and SSO Instance ARN
         )["AttachedManagedPolicies"]
         perm_managed_policy_arns = [d["Arn"] for d in perm_managed_policies]
 
+        # Customer managed
+        cmp_refs = sso_client.list_customer_managed_policy_references_in_permission_set(
+            InstanceArn=ssoInstanceArn, PermissionSetArn=permission_set, MaxResults=100
+        )["CustomerManagedPolicyReferences"]
+        cmp_refs_list = [
+            {"Name": r["Name"], "Path": r.get("Path", "/")} for r in cmp_refs
+        ]
+
         # Add permission set info to dict
         logging.info(f"Adding Permission Set: {perm_description['Name']}")
         perm_set_dict[perm_description["Name"]] = {
             "PermissionSet": permission_set,
             "ManagedPolicyArns": perm_managed_policy_arns,
+            "CustomerManagedPolicyReferences": cmp_refs_list,
             "Description": perm_description["Description"],
             "SessionDuration": perm_description["SessionDuration"],
             "IsForManagementAccount": is_for_management_account,
         }
+
         inline_pol = sso_client.get_inline_policy_for_permission_set(
             InstanceArn=ssoInstanceArn, PermissionSetArn=permission_set
         )
@@ -146,10 +156,19 @@ if __name__ == "__main__":  # Get Identity Store and SSO Instance ARN
         except sso_client.exceptions.ResourceNotFoundException:
             perm_bound = None
         if perm_bound:
-            permission_boundary_object = {
-                "PolicyType": "AWS",
-                "Policy": perm_bound["PermissionsBoundary"]["ManagedPolicyArn"],
-            }
+            boundary = perm_bound["PermissionsBoundary"]
+            if "ManagedPolicyArn" in boundary:
+                permission_boundary_object = {
+                    "PolicyType": "AWS",
+                    "Policy": boundary["ManagedPolicyArn"],
+                }
+            else:
+                ref = boundary["CustomerManagedPolicyReference"]
+                permission_boundary_object = {
+                    "PolicyType": "CUSTOMER",
+                    "Policy": ref["Name"],
+                    "Path": ref.get("Path", "/"),
+                }
             perm_set_dict[perm_description["Name"]][
                 "PermissionBoundary"
             ] = permission_boundary_object
