@@ -88,11 +88,9 @@ def write_assignment_templates(output_directory, assignments, org_client):
     output = {}
     for tf_index in assignments:
         account_target = assignments[tf_index]["details"]["target_id"]
-        describe_account_response = org_client.describe_account(
-            AccountId=account_target
-        )["Account"]
+        describe_account_response = org_client.describe_account(AccountId=account_target)["Account"]
         account_target_name = describe_account_response["Name"]
-        if describe_account_response["State"] == "SUSPENDED":
+        if (describe_account_response.get("State") or describe_account_response.get("Status")) == "SUSPENDED":
             logging.warning(f"Skipping SUSPENDED account named {account_target_name}")
             continue
         principal_name = assignments[tf_index]["details"]["principal_name"]
@@ -237,10 +235,11 @@ if __name__ == "__main__":
         logging.info(f"Processing account {account}...")
         # If the account is suspended, skip it
         account_response = org_client.describe_account(AccountId=account)["Account"]
-        account_status = account_response["State"]
+        account_status = account_response.get("State") or account_response.get("Status")
         account_name = account_response["Name"]
         account_email = account_response["Email"]
-        if account_status == "SUSPENDED":
+        INACTIVE_ACCOUNT_STATES = {"SUSPENDED", "PENDING_CLOSURE", "CLOSED"}
+        if account_status in INACTIVE_ACCOUNT_STATES:
             logging.warning(
                 f"Account {account_name} is suspended and will not be processed"
             )
