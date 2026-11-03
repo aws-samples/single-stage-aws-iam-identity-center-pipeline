@@ -12,10 +12,31 @@ logging.basicConfig(level=logging.INFO)
 
 # This function will create a Terraform manifest file used to import existing permission sets into the TF pipeline
 # It will also create YAML files that describe the contents of the permission set assignments
-# Control Tower-owned assignments will not be imported.
+# Control Tower-owned assignments will not be imported, unless running with --non-delegated-admin-mode.
 # The YAML files that are outputted will be grouped into files based on the user/group that has the associated entitlements
 IMPORTS_FILENAME = os.path.join(".", "import_assignments.tf")
+IMPORTS_FILENAME_MANAGEMENT = os.path.join(".", "import_assignments_mgmt.tf")
 TEMPLATE_OUTPUT_DIRECTORY = "./source/assignments/templates"
+TEMPLATE_OUTPUT_DIRECTORY_MANAGEMENT = "./source/assignments/templates_management"
+
+# Device names Windows reserves regardless of extension (CON.yaml is still CON).
+WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{n}" for prefix in ("COM", "LPT") for n in range(1, 10)
+}
+MAX_FILENAME_STEM = 200
+
+
+def safe_filename_stem(name: str) -> str:
+    # Principal names are display names synced from the IdP, so they can contain path
+    # separators, "..", characters Windows rejects, or nothing usable at all.
+    # Windows drops trailing dots/spaces; leading dots make hidden files.
+    stem = re.sub(r"[^A-Za-z0-9._@+-]", "_", name.strip(" ."))
+    stem = stem.strip(".")
+    if not stem or set(stem) <= {"_"}:
+        stem = "principal"
+    if stem.split(".")[0].upper() in WINDOWS_RESERVED_NAMES:
+        stem = f"_{stem}"
+    return stem[:MAX_FILENAME_STEM]
 
 
 def is_managed_by_control_tower(
@@ -43,6 +64,78 @@ def is_managed_by_control_tower(
     return f"{principal_name}|{permission_set}" in ct_assignment_strings
 
 
+def write_import_manifest(file_name, assignments):
+    logging.info(f"Writing assignment manifest to {file_name}...")
+    with open(file_name, "w") as file:
+        file.write(
+            f"# This file was automatically generated using the {os.path.basename(__file__)} script"
+        )
+        for tf_index in assignments:
+            # Remove any illegal characters from the Terraform identifier
+            pattern = r"[^a-zA-Z0-9-_]"
+            escaped_index = re.sub(pattern, "", tf_index)
+            file.write(
+                f"""
+import {{
+  to = aws_ssoadmin_account_assignment.assignment_{escaped_index}
+  id = "{assignments[tf_index]["import_string"]}"
+}}
+    """
+            )
+
+def write_assignment_templates(output_directory, assignments, org_client):
+    # Write Assignment YAML files to match up with existing resources
+    output = {}
+    for tf_index in assignments:
+        account_target = assignments[tf_index]["details"]["target_id"]
+        describe_account_response = org_client.describe_account(
+            AccountId=account_target
+        )["Account"]
+        account_target_name = describe_account_response["Name"]
+        if describe_account_response["State"] == "SUSPENDED":
+            logging.warning(f"Skipping SUSPENDED account named {account_target_name}")
+            continue
+        principal_name = assignments[tf_index]["details"]["principal_name"]
+        permission_set_name = assignments[tf_index]["details"]["permission_set_name"]
+        # Create the output structure for the assignment, grouped by principal name
+        if principal_name not in output:
+            output[principal_name] = {"Assignments": []}
+        output[principal_name]["Assignments"].append(
+            {
+                "Target": [account_target_name],
+                "PrincipalType": assignments[tf_index]["details"]["principal_type"],
+                "PrincipalId": principal_name,
+                "PermissionSetName": permission_set_name,
+            }
+        )
+
+    # Walk through the output and create a file for each principal in the templates folder
+    os.makedirs(output_directory, exist_ok=True)
+    output_root = os.path.realpath(output_directory)
+    used_stems = set()
+    for usergroup in output:
+        stem = safe_filename_stem(usergroup)
+        # Two principals can sanitize to the same stem (e.g. "a/b" and "a:b"); never overwrite.
+        candidate, counter = stem, 2
+        while candidate.lower() in used_stems:  # Windows file names are case-insensitive
+            candidate = f"{stem}-{counter}"
+            counter += 1
+        used_stems.add(candidate.lower())
+        if candidate != usergroup:
+            logging.warning(
+                f"Principal '{usergroup}' written as '{candidate}-assignments.yaml' to keep the file name safe"
+            )
+        template_path = os.path.join(output_directory, f"{candidate}-assignments.yaml")
+        # Defence in depth: the sanitized name must still resolve inside the output folder.
+        if os.path.dirname(os.path.realpath(template_path)) != output_root:
+            raise ValueError(f"Refusing to write outside {output_directory}: {template_path}")
+        with open(template_path, "w") as file:
+            file.write(yaml.dump(output[usergroup], indent=4))
+
+    # Use the grouping function to clean up the assignments
+    group_assignments_by_permission_set(output_directory)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -63,10 +156,18 @@ if __name__ == "__main__":
         default="Audit",
         help="The name of the Audit account in your AWS Organization. This is its Organization name, NOT the account email.",
     )
+    parser.add_argument(
+        "--non-delegated-admin-mode",
+        help="Specify this flag if you are running from the management account instead of the delegated admin account. "
+        "Writes management-account assignments to separate outputs and includes Control Tower default assignments. "
+        "Default is delegated admin.",
+        action="store_true",
+    )
     args = parser.parse_args()
     region = args.region
     log_archive_account_name = args.log_archive_account_name
     audit_account_name = args.audit_account_name
+    non_delegated_admin_mode = args.non_delegated_admin_mode
     # Config to handle throttling
     config = Config(
         retries={"max_attempts": 10, "mode": "adaptive"},
@@ -131,17 +232,6 @@ if __name__ == "__main__":
         if not next_token:
             break
 
-    # Get all accounts in the org, using pagination
-    all_accounts = []
-    first_response = org_client.list_accounts()
-    all_accounts.extend(first_response["Accounts"])
-    next_token = first_response.get("NextToken")
-    while next_token:
-        response = org_client.list_accounts(NextToken=next_token)
-        all_accounts.extend(response["Accounts"])
-        next_token = response.get("NextToken")
-        if not next_token:
-            break
     # Walk through all accounts in Identity Center, finding how each permission set is assigned
     for account in [acc["Id"] for acc in all_accounts]:
         logging.info(f"Processing account {account}...")
@@ -149,6 +239,7 @@ if __name__ == "__main__":
         account_response = org_client.describe_account(AccountId=account)["Account"]
         account_status = account_response["State"]
         account_name = account_response["Name"]
+        account_email = account_response["Email"]
         if account_status == "SUSPENDED":
             logging.warning(
                 f"Account {account_name} is suspended and will not be processed"
@@ -227,12 +318,21 @@ if __name__ == "__main__":
                         import_args["instance_arn"],
                     ]
                 )
-                # Resolve the principal name
+                # Resolve the principal name. Reset each time so a failed lookup can never
+                # reuse the previous assignment's name.
+                principal_name = None
                 if account_assignment["PrincipalType"] == "GROUP":
-                    principal_name = id_store_client.describe_group(
-                        IdentityStoreId=id_store_id,
-                        GroupId=account_assignment["PrincipalId"],
-                    )["DisplayName"]
+                    try:
+                        principal_name = id_store_client.describe_group(
+                            IdentityStoreId=id_store_id,
+                            GroupId=account_assignment["PrincipalId"],
+                        )["DisplayName"]
+                    except id_store_client.exceptions.ResourceNotFoundException:
+                        # Groups deleted (e.g. removed from the IdP) without being unassigned leave dangling references too
+                        logging.error(
+                            f"Account Assignment with Account ID {account_assignment['AccountId']} and Permission Set ARN {account_assignment['PermissionSetArn']} will be skipped as it had a deleted group ({account_assignment['PrincipalId']}) specified as its Principal ID"
+                        )
+                        continue
                 elif account_assignment["PrincipalType"] == "USER":
                     try:
                         principal_name = id_store_client.describe_user(
@@ -255,13 +355,12 @@ if __name__ == "__main__":
                     InstanceArn=ssoInstanceArn,
                     PermissionSetArn=account_assignment["PermissionSetArn"],
                 )["PermissionSet"]["Name"]
-                # Quit if the assignment is a Control Tower default assignment
-                if is_managed_by_control_tower(
+                # Skip Control Tower default assignments, except in non-delegated-admin mode, where
+                # the management account's view of the organization should be complete
+                if not non_delegated_admin_mode and is_managed_by_control_tower(
                     principal_name=principal_name,
                     permission_set=permission_set_name,
-                    account_email=org_client.describe_account(AccountId=account)[
-                        "Account"
-                    ]["Email"],
+                    account_email=account_email,
                     is_audit_account=is_audit_account,
                     is_log_archive_account=is_log_archive_account,
                 ):
@@ -288,76 +387,25 @@ if __name__ == "__main__":
                 elif import_args["is_in_management_account"] is True:
                     assignment_dict_mgmt[tf_index] = details_map
 
-    # Create output assignment manifests, splitting by whether they belong to the management account
-    assignments_file_list = [
-        {
-            "file_name": IMPORTS_FILENAME,
-            "is_management_assignment": False,
-        }
-    ]
-    for assignment_file in assignments_file_list:
-        logging.info(
-            f"Writing assignment manifest to {assignment_file['file_name']}..."
-        )
-        with open(assignment_file["file_name"], "w") as file:
-            file.write(
-                f"# This file was automatically generated using the {os.path.basename(__file__)} script"
-            )
-            for tf_index in assignment_dict:
-                if assignment_file["is_management_assignment"] != bool(
-                    re.search(r"MGMTACCT", tf_index)
-                ):
-                    logging.debug(
-                        f"Skipping writing assignment '{tf_index}' to {assignment_file['file_name']} because of a mismatch in management and non-management account resources."
-                    )
-                    continue
-                # Remove any illegal characters from the Terraform identifier
-                pattern = r"[^a-zA-Z0-9-_]"
-                escaped_index = re.sub(pattern, "", tf_index)
-                file.write(
-                    f"""
-import {{
-  to = aws_ssoadmin_account_assignment.assignment_{escaped_index}
-  id = "{assignment_dict[tf_index]["import_string"]}"
-}}
-    """
-                )
+    # Assignments of management-account-specific permission sets (named with MGMTACCT) are
+    # managed from the management account, wherever they are assigned.
+    member_assignments = {}
+    for tf_index, details_map in assignment_dict.items():
+        if re.search(r"MGMTACCT", tf_index):
+            assignment_dict_mgmt[tf_index] = details_map
+        else:
+            member_assignments[tf_index] = details_map
 
-    # Write Assignment JSON files to match up with existing resources
-    output = {}
-    for tf_index in assignment_dict:
-        account_target = assignment_dict[tf_index]["details"]["target_id"]
-        describe_account_response = org_client.describe_account(
-            AccountId=account_target
-        )["Account"]
-        account_target_name = describe_account_response["Name"]
-        if describe_account_response["State"] == "SUSPENDED":
-            logging.warning(f"Skipping SUSPENDED account named {account_target_name}")
-            continue
-        principal_name = assignment_dict[tf_index]["details"]["principal_name"]
-        permission_set_name = assignment_dict[tf_index]["details"][
-            "permission_set_name"
-        ]
-        # Create the output structure for the assignment, grouped by principal name
-        if principal_name not in output:
-            output[principal_name] = {"Assignments": []}
-        output[principal_name]["Assignments"].append(
-            {
-                "Target": [account_target_name],
-                "PrincipalType": assignment_dict[tf_index]["details"]["principal_type"],
-                "PrincipalId": principal_name,
-                "PermissionSetName": permission_set_name,
-            }
-        )
+    write_import_manifest(IMPORTS_FILENAME, member_assignments)
+    write_assignment_templates(TEMPLATE_OUTPUT_DIRECTORY, member_assignments, org_client)
 
-    # Walk through the output and create a file for each principal in the templates folder
-    os.makedirs(TEMPLATE_OUTPUT_DIRECTORY, exist_ok=True)
-    for usergroup in output:
-        template_path = os.path.join(
-            TEMPLATE_OUTPUT_DIRECTORY, f"{usergroup}-assignments.yaml"
+    if non_delegated_admin_mode:
+        write_import_manifest(IMPORTS_FILENAME_MANAGEMENT, assignment_dict_mgmt)
+        write_assignment_templates(
+            TEMPLATE_OUTPUT_DIRECTORY_MANAGEMENT, assignment_dict_mgmt, org_client
         )
-        with open(template_path, "w") as file:
-            file.write(yaml.dump(output[usergroup], indent=4))
-
-    # Use the grouping function to clean up the assignments
-    group_assignments_by_permission_set(TEMPLATE_OUTPUT_DIRECTORY)
+    elif assignment_dict_mgmt:
+        logging.warning(
+            f"{len(assignment_dict_mgmt)} management-account assignment(s) were found but not written. "
+            "Re-run from the management account with --non-delegated-admin-mode to include them."
+        )
