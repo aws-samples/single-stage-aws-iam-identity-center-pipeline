@@ -24,52 +24,44 @@ def group_assignments_by_permission_set(yaml_dir):
     """
 
     for filename in os.listdir(yaml_dir):
-        if filename.endswith(".yaml"):
-            grouping = {}
-            file_path = os.path.join(yaml_dir, filename)
-            with open(file_path, "r") as f:
-                data = yaml.safe_load(f)
-                for assignment in data.get("Assignments", []):
-                    permission_set_name = assignment["PermissionSetName"]
-                    principal_id = assignment["PrincipalId"]
-                    principal_type = assignment["PrincipalType"]
-                    targets_raw = assignment.get("Target", [])
-                    # Convert any numeric values in the target list to strings, padded to 12 digits
-                    targets = []
-                    for raw_target in targets_raw:
-                        if isinstance(raw_target, (int, float)):
-                            targets.append(f"{raw_target:012d}")
-                        else:
-                            targets.append(raw_target)
-
-                    key = (permission_set_name, principal_id, principal_type)
-                    if key not in grouping:
-                        grouping[key] = []
-                    grouping[key].extend(targets)
-            # Structure the data to dump it to YAML
-            logging.warning(
-                f"These are the targets: {targets}, and this is the grouping: {grouping}"
+        if not filename.endswith(".yaml"):
+            continue
+        file_path = os.path.join(yaml_dir, filename)
+        with open(file_path, "r") as f:
+            data = yaml.safe_load(f)
+        # Leave files that are empty or are not assignment files untouched
+        if not isinstance(data, dict) or "Assignments" not in data:
+            logging.warning(f"Skipping {file_path}: no Assignments key")
+            continue
+        grouping = {}
+        for assignment in data["Assignments"]:
+            key = (
+                assignment["PermissionSetName"],
+                assignment["PrincipalId"],
+                assignment["PrincipalType"],
             )
-            new_data = {
-                "Assignments": [
-                    {
-                        "PermissionSetName": permission_set_name,
-                        "PrincipalId": principal_id,
-                        "PrincipalType": principal_type,
-                        "Target": sorted(set(targets)),
-                    }
-                    for (
-                        permission_set_name,
-                        principal_id,
-                        principal_type,
-                    ), targets in grouping.items()
-                ]
-            }
-            with open(file_path, "w") as f:
-                logging.info(f"Writing to {file_path}")
-                logging.info(f"New data: {new_data}")
-                yaml.safe_dump(new_data, f, default_flow_style=False, indent=2)
-    return
+            targets = []
+            for raw_target in assignment.get("Target", []):
+                # Unquoted account IDs load as ints; restore the 12-digit string
+                if isinstance(raw_target, int) and not isinstance(raw_target, bool):
+                    targets.append(str(raw_target).zfill(12))
+                else:
+                    targets.append(str(raw_target))
+            grouping.setdefault(key, []).extend(targets)
+        new_data = {
+            "Assignments": [
+                {
+                    "PermissionSetName": permission_set_name,
+                    "PrincipalId": principal_id,
+                    "PrincipalType": principal_type,
+                    "Target": sorted(set(targets)),
+                }
+                for (permission_set_name, principal_id, principal_type), targets in grouping.items()
+            ]
+        }
+        logging.info(f"Writing {len(new_data['Assignments'])} grouped assignment(s) to {file_path}")
+        with open(file_path, "w") as f:
+            yaml.safe_dump(new_data, f, default_flow_style=False, indent=2)
 
 
 if __name__ == "__main__":
